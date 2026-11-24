@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghost Video Editor Bangla — ভিডিও এডিটর</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="ghost" aria-hidden="true">👻</span>
+    <div>
+      <h1>Ghost Video Editor Bangla</h1>
+      <p>ট্রিম · স্প্লিট · মার্জ · টেক্সট · ফিল্টার &nbsp;·&nbsp; <span id="appVersion">v1.0.0</span></p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button id="btnUpdate" class="btn ghost-btn" type="button">আপডেট দেখুন</button>
+    <button id="btnTray" class="btn ghost-btn" type="button" title="ট্রেতে লুকান">ট্রেতে লুকান</button>
+  </div>
+</header>
+
+<div id="updateBanner" class="update-banner hidden">
+  <span>🎉 নতুন ভার্সন এসেছে: <strong id="updateVersion"></strong> — আপনার ভার্সন <span id="currentVersion"></span></span>
+  <button id="btnDownloadUpdate" class="btn primary small" type="button">ডাউনলোড করুন</button>
+  <button id="btnDismissUpdate" class="btn ghost-btn small" type="button">পরে</button>
+</div>
+
+<main class="layout">
+  <section class="panel clips-panel">
+    <h2>১. ভিডিও বেছে নিন</h2>
+    <div class="controls">
+      <button id="btnPickVideo" class="btn primary" type="button">📂 ভিডিও খুলুন</button>
+      <button id="btnPickVideos" class="btn" type="button">➕ মার্জের জন্য একাধিক</button>
+    </div>
+    <p class="hint">একটি ভিডিও খুলে এডিট করুন, অথবা মার্জের জন্য একাধিক ভিডিও বেছে নিন।</p>
+    <div id="clipInfo" class="clip-info empty">কোনো ভিডিও খোলা হয়নি।</div>
+    <ul id="clipList" class="clip-list"></ul>
+    <button id="btnMerge" class="btn primary" type="button" disabled>🔗 ক্লিপগুলো মার্জ করুন</button>
+    <p class="hint">মার্জে একই কোডেকের ক্লিপ ভালো কাজ করে — ভিন্ন কোডেক হলে মার্জ ব্যর্থ হতে পারে।</p>
+  </section>
+
+  <section class="panel edit-panel">
+    <h2>২. প্রিভিউ ও এডিট</h2>
+    <div class="preview-wrap">
+      <video id="preview" controls playsinline></video>
+      <div id="previewEmpty" class="preview-empty">প্রিভিউ এখানে দেখা যাবে — প্রথমে একটি ভিডিও খুলুন</div>
+    </div>
+    <div class="timer-row">
+      <span>সময়: <strong id="timeNow">00:00</strong> / <strong id="timeTotal">00:00</strong></span>
+      <span id="statusText" class="status">প্রস্তুত</span>
+    </div>
+
+    <div class="field-row">
+      <label>শুরু (সেকেন্ড)
+        <input id="trimStart" type="number" min="0" step="0.1" value="0">
+      </label>
+      <label>শেষ (সেকেন্ড)
+        <input id="trimEnd" type="number" min="0" step="0.1" value="0" placeholder="খালি = শেষ পর্যন্ত">
+      </label>
+      <button id="btnSetStart" class="btn small" type="button">▶ শুরু = এখন</button>
+      <button id="btnSetEnd" class="btn small" type="button">⏹ শেষ = এখন</button>
+    </div>
+    <div class="controls">
+      <button id="btnTrim" class="btn" type="button" disabled>✂️ ট্রিম করুন</button>
+      <button id="btnSplit" class="btn" type="button" disabled>🔪 এই জায়গায় স্প্লিট করুন</button>
+    </div>
+
+    <h3>টেক্সট</h3>
+    <div class="field-row">
+      <label class="grow">টেক্সট
+        <input id="textInput" type="text" placeholder="ভিডিওতে লেখা…" maxlength="200">
+      </label>
+      <label>অবস্থান
+        <select id="textPosition">
+          <option value="bottom-center">নিচে মাঝখানে</option>
+          <option value="top-center">উপরে মাঝখানে</option>
+          <option value="center">মাঝখানে</option>
+          <option value="top-left">উপরে বামে</option>
+          <option value="top-right">উপরে ডানে</option>
+          <option value="bottom-left">নিচে বামে</option>
+          <option value="bottom-right">নিচে ডানে</option>
+        </select>
+      </label>
+      <label>সাইজ
+        <input id="textSize" type="number" min="12" max="200" value="48">
+      </label>
+    </div>
+
+    <h3>ফিল্টার ও গতি</h3>
+    <div class="slider-row">
+      <label>উজ্জ্বলতা <span id="brightnessVal">০</span>
+        <input id="brightness" type="range" min="-100" max="100" value="0">
+      </label>
+      <label>কনট্রাস্ট <span id="contrastVal">১০০</span>
+        <input id="contrast" type="range" min="0" max="200" value="100">
+      </label>
+    </div>
+    <div class="field-row">
+      <label>গতি
+        <select id="speedSelect">
+          <option value="0.25">০.২৫× (ধীর)</option>
+          <option value="0.5">০.৫×</option>
+          <option value="0.75">০.৭৫×</option>
+          <option value="1" selected>১× (সাধারণ)</option>
+          <option value="1.25">১.২৫×</option>
+          <option value="1.5">১.৫×</option>
+          <option value="2">২×</option>
+          <option value="4">৪×</option>
+        </select>
+      </label>
+      <label class="check"><input id="muteCheck" type="checkbox"> শব্দ বন্ধ (মিউট)</label>
+    </div>
+    <div class="controls">
+      <button id="btnApplyText" class="btn" type="button" disabled>🔤 টেক্সট বসান</button>
+      <button id="btnApplyFilter" class="btn" type="button" disabled>🎨 ফিল্টার লাগান</button>
+      <button id="btnApplySpeed" class="btn" type="button" disabled>⏩ গতি বদলান</button>
+    </div>
+
+    <h3>এক্সপোর্ট</h3>
+    <p class="hint">এক্সপোর্টে উপরের সব সেটিং (ট্রিম, টেক্সট, ফিল্টার, গতি, মিউট) একসাথে MP4 হিসেবে সেভ হবে।</p>
+    <div class="controls">
+      <button id="btnExport" class="btn primary big" type="button" disabled>⬇️ MP4 এক্সপোর্ট করুন</button>
+    </div>
+    <div id="progressWrap" class="progress-wrap hidden">
+      <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+      <span id="progressText">০%</span>
+    </div>
+    <p class="hint limits">⚠️ সীমা: এক্সপোর্ট MP4 (ffmpeg) — বড় ফাইল সময় নেবে। টেক্সট বসাতে কম্পিউটারে ফন্ট থাকা লাগে; ফন্ট না পেলে টেক্সটের কাজটি জানিয়ে বাতিল হবে।</p>
+  </section>
+
+  <section class="panel history-panel">
+    <div class="panel-head">
+      <h2>৩. হিস্টোরি</h2>
+      <span id="historyCount" class="count">০টি</span>
+    </div>
+    <input id="historySearch" type="search" placeholder="ফাইলের নাম দিয়ে খুঁজুন…" aria-label="হিস্টোরি খুঁজুন">
+    <ul id="historyList" class="history-list">
+      <li class="empty">এখনো কিছু এক্সপোর্ট হয়নি।</li>
+    </ul>
+    <p class="hint">হিস্টোরি এই কম্পিউটারেই থাকে (localStorage, সর্বোচ্চ ৫০টি) — অ্যাপ মুছে ফেললে মুছে যাবে, ফাইল থাকবে।</p>
+  </section>
+</main>
+
+<footer class="footer">
+  <span>Ghost Video Editor Bangla · ফ্রি ও ওপেন সোর্স</span>
+  <span id="updateStatus" class="muted"></span>
+</footer>
+
+<script src="renderer.js"></script>
+</body>
+</html>
