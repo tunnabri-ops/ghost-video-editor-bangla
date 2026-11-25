@@ -78,7 +78,10 @@
   .preview-wrap.show{display:block}
   .stage{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden}
   .stage video{width:100%;display:block;background:#000}
+  .stage video.next{position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none;transition:opacity .1s linear}
   .stage canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .subtitle-overlay{position:absolute;left:0;right:0;bottom:8%;text-align:center;pointer-events:none;padding:0 8%;font-size:clamp(16px,3.2vw,28px);font-weight:700;line-height:1.35;color:#fff;text-shadow:0 2px 6px rgba(0,0,0,.9),0 0 2px #000;white-space:pre-line}
+  .subtitle-overlay:empty{display:none}
   .player-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
   .player-bar input[type="range"].seek{flex:1;min-width:140px}
   .time-line{font-size:13.5px;color:var(--muted);margin-top:8px}
@@ -176,7 +179,9 @@
     <div class="preview-wrap" id="previewWrap">
       <div class="stage">
         <video id="videoEl" playsinline preload="metadata"></video>
+        <video id="videoEl2" class="next" playsinline preload="metadata" aria-hidden="true"></video>
         <canvas id="overlayCanvas" aria-hidden="true"></canvas>
+        <div id="subtitleOverlay" class="subtitle-overlay" aria-live="polite"></div>
       </div>
 
       <div class="player-bar">
@@ -215,6 +220,54 @@
           <div class="slider-row" style="margin-top:10px"><span style="font-size:13px;color:var(--muted)">আকার</span><input type="range" id="fontSizeRange" min="16" max="120" step="1" value="48" /><output id="fontSizeLabel">৪৮</output></div>
         </div>
 
+        <!-- Subtitles -->
+        <div class="ctl">
+          <label class="flabel">💬 সাবটাইটেল (SRT)
+            <small>SRT ফাইল বাছুন — সঠিক সময়ে প্রিভিউতে দেখাবে, এক্সপোর্টে ভিডিওতেই বসে যাবে।</small>
+          </label>
+          <div class="actions" style="margin-top:0">
+            <button class="btn small" id="srtPickBtn" type="button">📄 SRT ফাইল বাছুন</button>
+            <button class="btn small danger hidden" id="srtClearBtn" type="button">✕ সরান</button>
+          </div>
+          <p style="font-size:13.5px;color:var(--muted);margin:8px 0 0" id="srtStatus">কোনো সাবটাইটেল লোড হয়নি।</p>
+          <input type="file" id="srtInput" accept=".srt,text/plain" class="hidden" />
+        </div>
+
+        <!-- Background music -->
+        <div class="ctl">
+          <label class="flabel">🎵 ব্যাকগ্রাউন্ড মিউজিক
+            <small>অডিও ফাইল বাছুন — ভিডিওর শব্দের নিচে বাজবে, শুরুতে ফেড ইন আর শেষে ফেড আউট হবে। প্রিভিউ আর এক্সপোর্ট — দুই জায়গাতেই লাগবে।</small>
+          </label>
+          <div class="actions" style="margin-top:0">
+            <button class="btn small" id="musicPickBtn" type="button">🎵 মিউজিক বাছুন</button>
+            <button class="btn small danger hidden" id="musicClearBtn" type="button">✕ সরান</button>
+          </div>
+          <p style="font-size:13.5px;color:var(--muted);margin:8px 0 0" id="musicStatus">কোনো মিউজিক লোড হয়নি।</p>
+          <div class="slider-row" style="margin-top:10px"><span style="font-size:13px;color:var(--muted)">ভলিউম</span><input type="range" id="musicVolRange" min="0" max="1" step="0.05" value="0.5" /><output id="musicVolLabel">৫০%</output></div>
+          <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+            <label style="font-size:13px;color:var(--muted)">ফেড ইন (সে.) <input type="number" id="musicFadeIn" min="0" max="10" step="0.5" value="1" style="width:80px"></label>
+            <label style="font-size:13px;color:var(--muted)">ফেড আউট (সে.) <input type="number" id="musicFadeOut" min="0" max="10" step="0.5" value="1" style="width:80px"></label>
+          </div>
+          <input type="file" id="musicInput" accept="audio/*" class="hidden" />
+          <audio id="musicEl" preload="metadata" class="hidden"></audio>
+        </div>
+
+        <!-- Transitions -->
+        <div class="ctl">
+          <label class="flabel">🔀 ক্লিপ ট্রানজিশন
+            <small>স্প্লিট করা ক্লিপগুলো একসাথে চালালে / এক্সপোর্ট করলে ক্লিপের মাঝখানে এই ট্রানজিশন লাগবে।</small>
+          </label>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <select id="transitionSel" aria-label="ট্রানজিশন" style="flex:1;min-width:130px">
+              <option value="none" selected>কোনো ট্রানজিশন নয়</option>
+              <option value="fade">ফেড (ক্রসফেড)</option>
+              <option value="slide">স্লাইড (বাম থেকে)</option>
+            </select>
+            <label style="font-size:13px;color:var(--muted)">দৈর্ঘ্য (সে.) <input type="number" id="transitionDur" min="0.1" max="2" step="0.1" value="0.5" style="width:80px"></label>
+          </div>
+          <div class="actions"><button class="btn small" id="playAllBtn" type="button">▶ সব ক্লিপ একসাথে চালান</button></div>
+        </div>
+
         <!-- Filters -->
         <div class="ctl">
           <label class="flabel">🎨 ফিল্টার
@@ -249,9 +302,20 @@
 
       <!-- Export -->
       <h3 style="margin-top:20px">⬇ এক্সপোর্ট</h3>
-      <p style="font-size:13.5px;color:var(--muted);margin:0 0 6px">সিলেক্ট করা ক্লিপটা WebM ভিডিও হিসেবে নামবে — ট্রিম, টেক্সট, ফিল্টার আর গতি সব বসানো অবস্থায়। এক্সপোর্ট রিয়েল-টাইমে রেকর্ড হয়, তাই ক্লিপ যত লম্বা, সময় তত বেশি লাগবে।</p>
+      <p style="font-size:13.5px;color:var(--muted);margin:0 0 6px">সিলেক্ট করা ক্লিপটা WebM ভিডিও হিসেবে নামবে — ট্রিম, টেক্সট, সাবটাইটেল, মিউজিক, ফিল্টার আর গতি সব বসানো অবস্থায়। এক্সপোর্ট রিয়েল-টাইমে রেকর্ড হয়, তাই ক্লিপ যত লম্বা, সময় তত বেশি লাগবে।</p>
+      <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+        <label style="font-size:14px">প্রিসেট
+          <select id="presetSel" aria-label="এক্সপোর্ট প্রিসেট" style="min-width:220px">
+            <option value="original" selected>আসল সাইজ (Original)</option>
+            <option value="720p">720p HD (1280×720)</option>
+            <option value="1080p">1080p Full HD (1920×1080)</option>
+            <option value="vertical">ভার্টিকাল 9:16 (1080×1920) — Shorts/Reels</option>
+          </select>
+        </label>
+      </div>
       <div class="actions" style="margin-top:0">
         <button class="btn primary" id="exportBtn" type="button">⬇ সিলেক্টেড ক্লিপ এক্সপোর্ট করুন (.webm)</button>
+        <button class="btn" id="exportAllBtn" type="button">⬇ সব ক্লিপ একসাথে এক্সপোর্ট করুন</button>
         <button class="btn danger hidden" id="cancelExportBtn" type="button">✕ এক্সপোর্ট বাতিল</button>
         <button class="btn hidden" id="exportDownloadBtn" type="button">💾 এক্সপোর্ট করা ফাইল আবার নামান</button>
       </div>
@@ -277,6 +341,10 @@
         <li><b>ট্রিম</b> — শুরু/শেষ স্লাইডার; প্রিভিউ লুপ আর এক্সপোর্ট দুই জায়গাতেই লাগে</li>
         <li><b>স্প্লিট</b> — প্লেহেডে ক্লিপ দুই ভাগ হয়, প্রতিটা আলাদা করে এডিট করা যায়</li>
         <li><b>টেক্সট ওভারলে</b> — লেখা, অবস্থান (উপরে/মাঝে/নিচে), আকার — এক্সপোর্টে বসে যায়</li>
+        <li><b>সাবটাইটেল (SRT)</b> — সঠিক সময়ে প্রিভিউতে দেখায়, এক্সপোর্টে ভিডিওতে বসে যায়</li>
+        <li><b>ট্রানজিশন</b> — ক্লিপের মাঝে ফেড / স্লাইড, সব ক্লিপ একসাথে চালালে আর এক্সপোর্টে লাগে</li>
+        <li><b>ব্যাকগ্রাউন্ড মিউজিক</b> — ভিডিওর শব্দের নিচে মিউজিক, ফেড ইন/আউটসহ</li>
+        <li><b>এক্সপোর্ট প্রিসেট</b> — আসল সাইজ, 720p, 1080p, ভার্টিকাল 9:16 (Shorts/Reels)</li>
         <li><b>ফিল্টার</b> — উজ্জ্বলতা, কনট্রাস্ট, রং — প্রিভিউ আর এক্সপোর্টে একই</li>
         <li><b>গতি</b> — ০.৫× / ১× / ১.৫× / ২×, প্রিভিউ আর এক্সপোর্টে একই</li>
         <li><b>এক্সপোর্ট</b> — ক্যানভাস + MediaRecorder দিয়ে আসল WebM ভিডিও, প্রগ্রেসসহ</li>
@@ -288,15 +356,16 @@
       <ul>
         <li>এক্সপোর্ট <b>WebM</b> ফরম্যাটে হয় — <b>MP4 নয়</b>; VLC, Chrome, Edge-এ সরাসরি চলে। MP4 বানাতে ডেস্কটপ এডিটর লাগবে।</li>
         <li><b>বড় ফাইল ধীর</b> — এক্সপোর্ট রিয়েল-টাইমে রেকর্ড হয় (১ মিনিটের ক্লিপ ≈ ১ মিনিট), আর 1080p+ ভিডিওতে আরও ভারী হতে পারে।</li>
-        <li>এক্সপোর্টে <b>শুধু সিলেক্ট করা ক্লিপটাই</b> যায় — সব ক্লিপ একসাথে জোড়া দিয়ে এক্সপোর্ট হয় না।</li>
-        <li>এক্সপোর্টে <b>অডিও নাও থাকতে পারে</b> — ব্রাউজার ভেদে ক্যানভাস-রেকর্ডে অডিও ধরা যায় না; অডিও না এলে ভিডিওটা নীরব হবে, এটা ব্রাউজারের সীমা।</li>
+        <li>এক্সপোর্টে <b>শুধু সিলেক্ট করা ক্লিপটাই</b> যায় — সব ক্লিপ একসাথে জোড়া দিয়ে এক্সপোর্ট করতে "সব ক্লিপ একসাথে এক্সপোর্ট করুন" চাপুন (ট্রানজিশন থাকলে সেখানেই লাগবে)।</li>
+        <li>এক্সপোর্টে <b>অডিও নাও থাকতে পারে</b> — ব্রাউজার ভেদে ক্যানভাস-রেকর্ডে অডিও ধরা যায় না; অডিও না এলে ভিডিওটা নীরব হবে, এটা ব্রাউজারের সীমা। ব্যাকগ্রাউন্ড মিউজিকও একইভাবে ব্রাউজার অডিও দিলে তবেই এক্সপোর্টে যাবে।</li>
+        <li>ভার্টিকাল 9:16 প্রিসেটে ভিডিওটা <b>প্যাড করে</b> 1080×1920 বানানো হয় (কালো বর্ডার) — কিছুই কাটা যায় না।</li>
         <li>কিছু ফরম্যাট (যেমন কিছু MOV/AVI) ব্রাউজার চালাতে না পারলে লোডই হবে না।</li>
         <li>কিছুই আপলোড হয় না — সব কাজ আপনার নিজের ব্রাউজারেই হয়।</li>
       </ul>
     </section>
   </div>
 
-  <p class="foot">এডিট হয় আপনার নিজের ব্রাউজারেই — কোনো সার্ভারে ভিডিও ওঠে না। অন্যের ভিডিও অনুমতি ছাড়া এডিট করে ছড়াবেন না।</p>
+  <p class="foot">Ghost Video Editor Bangla v1.1.0 — এডিট হয় আপনার নিজের ব্রাউজারেই — কোনো সার্ভারে ভিডিও ওঠে না। অন্যের ভিডিও অনুমতি ছাড়া এডিট করে ছড়াবেন না।</p>
 </div>
 
 <script>
@@ -358,6 +427,121 @@ var audioCtxShared=null, audioSrcShared=null; /* createMediaElementSource শু
 var exportCount=0;
 var rafId=0, lastOverlayDraw=0;
 
+/* ---------- v1.1.0: subtitles (SRT) ---------- */
+var subCues=[]; /* {start, end, text} */
+function parseSrtTime(s){
+  var m=/(\d+):(\d+):(\d+)[,.](\d+)/.exec(s.trim());
+  if(!m) return null;
+  return (+m[1])*3600 + (+m[2])*60 + (+m[3]) + (+m[4])/1000;
+}
+function parseSRT(text){
+  var cues=[];
+  String(text||"").replace(/^\uFEFF/,"").split(/\r?\n\r?\n/).forEach(function(block){
+    var lines=block.split(/\r?\n/).map(function(l){ return l.trim(); }).filter(Boolean);
+    if(lines.length<2) return;
+    var ti=-1;
+    for(var i=0;i<lines.length;i++){ if(lines[i].indexOf("-->")!==-1){ ti=i; break; } }
+    if(ti<0) return;
+    var parts=lines[ti].split("-->");
+    var start=parseSrtTime(parts[0]), end=parseSrtTime(parts[1]||"");
+    if(start===null||end===null||end<=start) return;
+    var txt=lines.slice(ti+1).join("\n").trim();
+    if(txt) cues.push({start:start, end:end, text:txt});
+  });
+  cues.sort(function(a,b){ return a.start-b.start; });
+  return cues;
+}
+function subtitleAt(cues, t){
+  for(var i=0;i<cues.length;i++){
+    if(t>=cues[i].start && t<cues[i].end) return cues[i].text;
+  }
+  return "";
+}
+function updateSubtitleOverlay(){
+  var el=$("subtitleOverlay");
+  if(!el) return;
+  el.textContent = subCues.length ? subtitleAt(subCues, video.currentTime||0) : "";
+}
+/* ক্যানভাসে সাবটাইটেল আঁকা (এক্সপোর্টে বার্ন হয়) */
+function drawSubtitleOn(ctx, w, h, t){
+  var txt=subtitleAt(subCues, t);
+  if(!txt) return;
+  var px=Math.max(14, Math.round(h*0.045));
+  ctx.save();
+  ctx.font="700 "+px+"px system-ui, sans-serif";
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+  ctx.lineWidth=Math.max(3, px/8);
+  ctx.strokeStyle="rgba(0,0,0,0.8)";
+  ctx.fillStyle="#ffffff";
+  var maxW=w*0.9;
+  var lines=[];
+  txt.split("\n").forEach(function(raw){
+    var words=raw.split(/\s+/), cur="";
+    words.forEach(function(word){
+      var test=cur?cur+" "+word:word;
+      if(ctx.measureText(test).width>maxW && cur){ lines.push(cur); cur=word; }
+      else cur=test;
+    });
+    if(cur) lines.push(cur);
+  });
+  var lineH=px*1.3;
+  var baseY=h-px*1.6-(lines.length-1)*lineH;
+  lines.forEach(function(line,i){
+    var ly=baseY+i*lineH;
+    ctx.strokeText(line, w/2, ly);
+    ctx.fillText(line, w/2, ly);
+  });
+  ctx.restore();
+}
+
+/* ---------- v1.1.0: background music ---------- */
+var musicEl=$("musicEl");
+var musicSrcShared=null, musicDestShared=null; /* এক্সপোর্টের অডিও রুট */
+var musicFileName="";
+function musicVolumeNow(){
+  var c=selectedClip();
+  if(!c || !musicEl || !musicFileName) return 0;
+  var base=parseFloat($("musicVolRange").value)||0;
+  var t=video.currentTime||0;
+  var fi=parseFloat($("musicFadeIn").value)||0;
+  var fo=parseFloat($("musicFadeOut").value)||0;
+  var f=1;
+  if(fi>0 && t-c.start<fi) f=Math.max(0,(t-c.start)/fi);
+  if(fo>0 && c.end-t<fo) f=Math.min(f, Math.max(0,(c.end-t)/fo));
+  return base*f;
+}
+function syncMusic(){
+  if(!musicEl || !musicFileName) return;
+  var c=selectedClip();
+  if(!c) return;
+  /* মিউজিক ক্লিপের শুরু থেকে বাজে; ক্লিপ বদলালে আবার শুরু থেকে */
+  if(musicEl.paused && !video.paused) musicEl.play().catch(function(){});
+  musicEl.volume=clamp(musicVolumeNow(),0,1);
+}
+
+/* ---------- v1.1.0: export presets ---------- */
+function exportCanvasSize(preset, vw, vh){
+  if(preset==="720p") return {w:1280, h:720};
+  if(preset==="1080p") return {w:1920, h:1080};
+  if(preset==="vertical") return {w:1080, h:1920};
+  var scale=Math.min(1, 1280/Math.max(vw, vh));
+  return {w:Math.max(2, Math.round(vw*scale)), h:Math.max(2, Math.round(vh*scale))};
+}
+/* প্রিসেট ক্যানভাসে ভিডিও আঁকা: fit + কালো প্যাড (কিছুই কাটা যায় না) */
+function drawVideoFittedAt(ctx, srcVideo, cw, ch, dx){
+  var vw=srcVideo.videoWidth, vh=srcVideo.videoHeight;
+  if(!vw||!vh) return;
+  var s=Math.min(cw/vw, ch/vh);
+  var dw=vw*s, dh=vh*s;
+  ctx.fillStyle="#000";
+  ctx.fillRect(0,0,cw,ch);
+  ctx.drawImage(srcVideo, (cw-dw)/2+(dx||0), (ch-dh)/2, dw, dh);
+}
+function drawVideoFitted(ctx, srcVideo, cw, ch){
+  drawVideoFittedAt(ctx, srcVideo, cw, ch, 0);
+}
+
 function selectedClip(){
   for(var i=0;i<clips.length;i++) if(clips[i].id===selectedId) return clips[i];
   return clips[0] || null;
@@ -378,7 +562,13 @@ function settingsSnapshot(){
     contrast:+$("contrastRange").value,
     saturation:+$("satRange").value,
     speed:speed,
-    muted:muted
+    muted:muted,
+    subtitles:subCues.length,
+    music:musicFileName||"",
+    musicVolume:+$("musicVolRange").value,
+    transition:$("transitionSel").value,
+    transitionDur:+$("transitionDur").value,
+    preset:$("presetSel").value
   };
 }
 
@@ -571,6 +761,10 @@ video.addEventListener("timeupdate", function(){
   if(!c) return;
   if(exporting) return; /* এক্সপোর্টের সময় আলাদা লুপ চালায় */
   if(video.currentTime>=c.end){
+    if(playingAll){
+      advanceToNextClip();
+      return;
+    }
     if($("loopChk").checked && !video.paused){
       video.currentTime=c.start;
     }else{
@@ -581,9 +775,11 @@ video.addEventListener("timeupdate", function(){
   }
   if(video.currentTime<c.start && !video.paused) video.currentTime=c.start;
   refreshTimeUI();
+  updateSubtitleOverlay();
+  syncMusic();
 });
-video.addEventListener("play", function(){ $("playBtn").textContent="⏸ থামান"; drawOverlay(); });
-video.addEventListener("pause", function(){ $("playBtn").textContent="▶ চালান"; drawOverlay(); });
+video.addEventListener("play", function(){ $("playBtn").textContent="⏸ থামান"; drawOverlay(); updateSubtitleOverlay(); syncMusic(); });
+video.addEventListener("pause", function(){ $("playBtn").textContent="▶ চালান"; drawOverlay(); if(musicEl) musicEl.pause(); });
 video.addEventListener("ended", function(){ $("playBtn").textContent="▶ চালান"; });
 
 /* ---------- wiring: input ---------- */
@@ -672,6 +868,132 @@ document.querySelectorAll("#speedRow .btn").forEach(function(btn){
   });
 });
 
+/* ---------- v1.1.0: subtitles / music / transitions wiring ---------- */
+var playingAll=false;
+var video2=$("videoEl2");
+function nextClipAfter(c){
+  var i=clips.indexOf(c);
+  return (i>=0 && i+1<clips.length) ? clips[i+1] : null;
+}
+function advanceToNextClip(){
+  var c=selectedClip();
+  var n=c && nextClipAfter(c);
+  if(!n){
+    playingAll=false;
+    video.pause();
+    video.currentTime=c?c.end:duration;
+    $("playBtn").textContent="▶ চালান";
+    return;
+  }
+  var trans=$("transitionSel").value;
+  var dur=clamp(parseFloat($("transitionDur").value)||0.5, 0.1, 2);
+  if(trans==="none" || !fileUrl){
+    selectClip(n.id);
+    video.play().catch(function(){});
+    return;
+  }
+  /* দুটো ভিডিও একসাথে চালিয়ে CSS ক্রসফেড/স্লাইড: video2 ওপরে আসে */
+  video2.src=fileUrl;
+  video2.currentTime=n.start;
+  video2.playbackRate=speed;
+  video2.muted=video.muted;
+  video2.style.transition="none";
+  video2.style.opacity="0";
+  video2.style.transform="translateX(0)";
+  function begin(){
+    video2.removeEventListener("seeked", begin);
+    video2.play().catch(function(){});
+    var ms=Math.round(dur*1000);
+    video2.style.transition="opacity "+dur+"s linear, transform "+dur+"s linear";
+    video.style.transition="opacity "+dur+"s linear, transform "+dur+"s linear";
+    if(trans==="slide"){
+      video2.style.transform="translateX(100%)";
+      requestAnimationFrame(function(){
+        video2.style.transform="translateX(0)";
+        video.style.transform="translateX(-100%)";
+      });
+    }else{
+      requestAnimationFrame(function(){ video2.style.opacity="1"; });
+    }
+    setTimeout(function(){
+      video.currentTime=video2.currentTime;
+      video.style.transition="none";
+      video.style.transform="translateX(0)";
+      video2.pause();
+      video2.style.transition="none";
+      video2.style.opacity="0";
+      video2.style.transform="translateX(0)";
+      video2.removeAttribute("src");
+      video2.load();
+      selectedId=n.id;
+      renderClips();
+      refreshTimeUI();
+      updateSubtitleOverlay();
+      if(playingAll) video.play().catch(function(){});
+    }, ms);
+  }
+  video2.addEventListener("seeked", begin);
+  if(Math.abs(video2.currentTime-n.start)<0.01) setTimeout(begin, 50);
+}
+$("playAllBtn").addEventListener("click", function(){
+  if(!clips.length){ showErr("আগে একটা ভিডিও লোড করুন।"); return; }
+  playingAll=true;
+  selectClip(clips[0].id);
+  video.playbackRate=speed;
+  video.play().catch(function(e){ showErr("ভিডিও চালানো যায়নি: "+e.message); });
+});
+$("srtPickBtn").addEventListener("click", function(){ $("srtInput").click(); });
+$("srtInput").addEventListener("change", function(){
+  var f=$("srtInput").files[0];
+  $("srtInput").value="";
+  if(!f) return;
+  var reader=new FileReader();
+  reader.onload=function(){
+    try{
+      var cues=parseSRT(reader.result);
+      subCues=cues;
+      $("srtStatus").textContent="✅ "+f.name+" — "+bnNum(cues.length)+"টি সাবটাইটেল লোড হয়েছে।";
+      $("srtClearBtn").classList.remove("hidden");
+      updateSubtitleOverlay();
+      showOk("সাবটাইটেল লোড হয়েছে — প্রিভিউতে সঠিক সময়ে দেখাবে।");
+    }catch(e){
+      showErr("SRT ফাইলটা পড়া যায়নি — ফাইলটা সঠিক SRT ফরম্যাটে আছে তো?");
+    }
+  };
+  reader.onerror=function(){ showErr("SRT ফাইলটা পড়া যায়নি।"); };
+  reader.readAsText(f);
+});
+$("srtClearBtn").addEventListener("click", function(){
+  subCues=[];
+  $("srtStatus").textContent="কোনো সাবটাইটেল লোড হয়নি।";
+  $("srtClearBtn").classList.add("hidden");
+  updateSubtitleOverlay();
+});
+$("musicPickBtn").addEventListener("click", function(){ $("musicInput").click(); });
+$("musicInput").addEventListener("change", function(){
+  var f=$("musicInput").files[0];
+  $("musicInput").value="";
+  if(!f) return;
+  if(musicEl.src) URL.revokeObjectURL(musicEl.src);
+  musicEl.src=URL.createObjectURL(f);
+  musicFileName=f.name;
+  musicEl.load();
+  $("musicStatus").textContent="🎵 "+f.name+" — ভিডিও চালালে মিউজিকও বাজবে।";
+  $("musicClearBtn").classList.remove("hidden");
+  showOk("মিউজিক লোড হয়েছে।");
+});
+$("musicClearBtn").addEventListener("click", function(){
+  if(musicEl){ musicEl.pause(); if(musicEl.src) URL.revokeObjectURL(musicEl.src); musicEl.removeAttribute("src"); }
+  musicFileName="";
+  musicSrcShared=null; musicDestShared=null;
+  $("musicStatus").textContent="কোনো মিউজিক লোড হয়নি।";
+  $("musicClearBtn").classList.add("hidden");
+});
+$("musicVolRange").addEventListener("input", function(){
+  $("musicVolLabel").textContent=bnNum(Math.round(parseFloat($("musicVolRange").value)*100))+"%";
+  syncMusic();
+});
+
 /* ---------- export ---------- */
 function exportProgressTick(){
   if(!exporting || !exportSeg) return;
@@ -701,7 +1023,10 @@ function onExportStopped(finish){
   video.pause();
   video.playbackRate=speed;
   video.muted=muted;
+  if(musicEl) musicEl.pause(); /* v1.1.0: এক্সপোর্টের মিউজিক থামান */
+  if(video2){ video2.pause(); video2.style.opacity="0"; }
   $("exportBtn").disabled=false;
+  $("exportAllBtn").disabled=false;
   $("cancelExportBtn").classList.add("hidden");
   $("exportBar").classList.remove("show");
   if(!finish){
@@ -745,9 +1070,11 @@ function startExport(){
   clearMsgs();
   var mime=pickMime();
   var canvas=document.createElement("canvas");
-  var scale=Math.min(1, 1280/Math.max(video.videoWidth, video.videoHeight));
-  canvas.width=Math.max(2, Math.round(video.videoWidth*scale));
-  canvas.height=Math.max(2, Math.round(video.videoHeight*scale));
+  /* v1.1.0: প্রিসেট অনুযায়ী ক্যানভাস সাইজ (vertical = 1080×1920, প্যাডসহ) */
+  var preset=$("presetSel").value;
+  var sz=exportCanvasSize(preset, video.videoWidth, video.videoHeight);
+  canvas.width=sz.w;
+  canvas.height=sz.h;
   var ctx=canvas.getContext("2d");
   var stream=canvas.captureStream(30);
   /* অডিও: ব্রাউজার দিলে তবেই যুক্ত হবে; না দিলে নীরব ভিডিও হবে (সীমা হিসেবে জানানো আছে) */
@@ -766,6 +1093,19 @@ function startExport(){
       var dest=actx.createMediaStreamDestination();
       src.connect(dest);
       exportAudio=src;
+      /* v1.1.0: ব্যাকগ্রাউন্ড মিউজিকও একই ডেস্টিনেশনে মেশানো হয় */
+      if(musicEl && musicFileName){
+        try{
+          if(!musicSrcShared){
+            musicSrcShared=actx.createMediaElementSource(musicEl);
+            musicSrcShared.connect(actx.destination);
+          }
+          musicSrcShared.connect(dest);
+          musicEl.volume=clamp(parseFloat($("musicVolRange").value)||0, 0, 1);
+          musicEl.currentTime=0;
+          musicEl.play().catch(function(){});
+        }catch(e2){ /* মিউজিক ছাড়াই এক্সপোর্ট চলবে */ }
+      }
       var at=dest.stream.getAudioTracks();
       if(at.length){ stream.addTrack(at[0]); audioTrackAdded=true; }
     }
@@ -795,6 +1135,7 @@ function startExport(){
   video.playbackRate=speed;
   video.muted=muted;
   $("exportBtn").disabled=true;
+  $("exportAllBtn").disabled=true;
   $("cancelExportBtn").classList.remove("hidden");
   $("exportDownloadBtn").classList.add("hidden");
   $("exportBar").classList.add("show");
@@ -808,9 +1149,10 @@ function startExport(){
     if(!exporting) return;
     try{
       ctx.filter=filterString();
-      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      drawVideoFitted(ctx, video, canvas.width, canvas.height);
       ctx.filter="none";
       drawTextOn(ctx, canvas.width, canvas.height);
+      drawSubtitleOn(ctx, canvas.width, canvas.height, video.currentTime);
     }catch(e){}
     if(video.currentTime>=c.end || video.ended){
       stopExportRecording(true);
@@ -846,6 +1188,182 @@ function startExport(){
   }
 }
 $("exportBtn").addEventListener("click", startExport);
+$("exportAllBtn").addEventListener("click", startExportAll);
+
+/* v1.1.0: সব ক্লিপ একসাথে এক্সপোর্ট — ক্লিপের মাঝে ফেড/স্লাইড ট্রানজিশনসহ।
+ * সব ক্লিপ একই ফাইলের অংশ, তাই মূল ভিডিও এলিমেন্টটা চালিয়ে গেলেই পরের
+ * ক্লিপে পৌঁছে যায়; ট্রানজিশনের সময়টুকুতে দ্বিতীয় ভিডিও এলিমেন্ট
+ * (videoEl2) পরের ক্লিপটা চালায় আর ক্যানভাসে দুটো ফ্রেম মেশানো হয়। */
+function startExportAll(){
+  if(!clips.length || !duration){ showErr("আগে একটা ভিডিও লোড করুন।"); return; }
+  if(exporting) return;
+  if(!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream){
+    showErr("এই ব্রাউজারে ক্যানভাস এক্সপোর্ট সাপোর্ট করে না। Chrome, Edge বা Firefox-এর নতুন সংস্করণ ব্যবহার করুন।");
+    return;
+  }
+  if(!video.videoWidth || !video.videoHeight){
+    showErr("ভিডিওর ফ্রেম এখনো তৈরি হয়নি — প্রিভিউটা একবার চালিয়ে আবার চাপুন।");
+    return;
+  }
+  clearMsgs();
+  var ordered=clips.slice().sort(function(a,b){ return a.start-b.start; });
+  var trans=$("transitionSel").value;
+  var transDur=clamp(parseFloat($("transitionDur").value)||0.5, 0.1, 2);
+  var mime=pickMime();
+  var canvas=document.createElement("canvas");
+  var preset=$("presetSel").value;
+  var sz=exportCanvasSize(preset, video.videoWidth, video.videoHeight);
+  canvas.width=sz.w; canvas.height=sz.h;
+  var ctx=canvas.getContext("2d");
+  var stream=canvas.captureStream(30);
+  var audioTrackAdded=false;
+  try{
+    var AC=window.AudioContext || window.webkitAudioContext;
+    if(AC && !muted){
+      if(!audioCtxShared) audioCtxShared=new AC();
+      var actx=audioCtxShared;
+      if(actx.state==="suspended") actx.resume().catch(function(){});
+      if(!audioSrcShared){
+        audioSrcShared=actx.createMediaElementSource(video);
+        audioSrcShared.connect(actx.destination);
+      }
+      var dest=actx.createMediaStreamDestination();
+      audioSrcShared.connect(dest);
+      exportAudio=audioSrcShared;
+      if(musicEl && musicFileName){
+        try{
+          if(!musicSrcShared){
+            musicSrcShared=actx.createMediaElementSource(musicEl);
+            musicSrcShared.connect(actx.destination);
+          }
+          musicSrcShared.connect(dest);
+          musicEl.volume=clamp(parseFloat($("musicVolRange").value)||0, 0, 1);
+          musicEl.currentTime=0;
+          musicEl.play().catch(function(){});
+        }catch(e2){}
+      }
+      var at=dest.stream.getAudioTracks();
+      if(at.length){ stream.addTrack(at[0]); audioTrackAdded=true; }
+    }
+  }catch(e){ audioTrackAdded=false; }
+  var opts={};
+  if(mime) opts.mimeType=mime;
+  opts.videoBitsPerSecond=5000000;
+  try{ exportRecorder=new MediaRecorder(stream, opts); }
+  catch(e){
+    try{ exportRecorder=new MediaRecorder(stream); }
+    catch(e2){ showErr("এক্সপোর্ট রেকর্ডার চালু করা যায়নি: "+e2.message); return; }
+  }
+  exportChunks=[];
+  exportRecorder.ondataavailable=function(ev){
+    if(ev.data && ev.data.size>0) exportChunks.push(ev.data);
+  };
+  exportRecorder.onstop=function(){ onExportStopped(true); };
+  exportRecorder.onerror=function(ev){
+    showErr("এক্সপোর্টে সমস্যা হয়েছে: "+(ev.error && ev.error.message ? ev.error.message : "অজানা সমস্যা"));
+  };
+
+  exporting=true;
+  var idx=0, nextStarted=false;
+  exportSeg={start:ordered[0].start, end:ordered[0].end};
+  exportStartAt=Date.now();
+  video.pause();
+  video.currentTime=ordered[0].start;
+  video.playbackRate=speed;
+  video.muted=muted;
+  $("exportBtn").disabled=true;
+  $("exportAllBtn").disabled=true;
+  $("cancelExportBtn").classList.remove("hidden");
+  $("exportDownloadBtn").classList.add("hidden");
+  $("exportBar").classList.add("show");
+  $("exportFill").style.width="0%";
+  $("exportStatus").textContent="সব ক্লিপ এক্সপোর্ট হচ্ছে… (১/"+bnNum(ordered.length)+")";
+  if(!audioTrackAdded && !muted){
+    $("exportStatus").textContent="সব ক্লিপ এক্সপোর্ট হচ্ছে… (এই ব্রাউজারে অডিও ধরা গেল না — ভিডিওটা নীরব হতে পারে।)";
+  }
+
+  function drawFrameAll(){
+    if(!exporting) return;
+    var cur=ordered[idx];
+    var t=video.currentTime||0;
+    var next=ordered[idx+1]||null;
+    try{
+      ctx.filter=filterString();
+      if(next && trans!=="none" && t>=cur.end-transDur){
+        if(!nextStarted){
+          nextStarted=true;
+          video2.src=fileUrl;
+          video2.currentTime=next.start;
+          video2.playbackRate=speed;
+          video2.muted=muted;
+          video2.play().catch(function(){});
+        }
+        var p=clamp((t-(cur.end-transDur))/transDur, 0, 1);
+        if(trans==="slide"){
+          drawVideoFittedAt(ctx, video, canvas.width, canvas.height, -p*canvas.width);
+          drawVideoFittedAt(ctx, video2, canvas.width, canvas.height, (1-p)*canvas.width);
+        }else{ /* fade */
+          drawVideoFitted(ctx, video, canvas.width, canvas.height);
+          ctx.globalAlpha=p;
+          drawVideoFitted(ctx, video2, canvas.width, canvas.height);
+          ctx.globalAlpha=1;
+        }
+      }else{
+        drawVideoFitted(ctx, video, canvas.width, canvas.height);
+      }
+      ctx.filter="none";
+      drawTextOn(ctx, canvas.width, canvas.height);
+      drawSubtitleOn(ctx, canvas.width, canvas.height, t);
+      /* মিউজিক ফেড আউট: শেষ ক্লিপের শেষদিকে */
+      if(musicEl && musicFileName){
+        var lastEnd=ordered[ordered.length-1].end;
+        var fo=parseFloat($("musicFadeOut").value)||0;
+        var base=parseFloat($("musicVolRange").value)||0;
+        var f=1;
+        if(fo>0 && lastEnd-t<fo) f=Math.max(0,(lastEnd-t)/fo);
+        musicEl.volume=clamp(base*f, 0, 1);
+      }
+    }catch(e){}
+    if(t>=cur.end || video.ended){
+      if(video2){ video2.pause(); }
+      nextStarted=false;
+      if(next){
+        idx++;
+        exportSeg={start:ordered[idx].start, end:ordered[idx].end};
+        $("exportStatus").textContent="সব ক্লিপ এক্সপোর্ট হচ্ছে… ("+bnNum(idx+1)+"/"+bnNum(ordered.length)+")";
+      }else{
+        stopExportRecording(true);
+        return;
+      }
+    }
+    exportRafId=requestAnimationFrame(drawFrameAll);
+  }
+  var recStarted=false;
+  function beginRecording(){
+    if(!exporting || recStarted) return;
+    recStarted=true;
+    try{ exportRecorder.start(250); }
+    catch(e){ showErr("এক্সপোর্ট শুরু করা যায়নি: "+e.message); exporting=false; return; }
+    exportTimerId=setInterval(exportProgressTick, 250);
+    exportProgressTick();
+    drawFrameAll();
+    video.play().catch(function(e){
+      showErr("এক্সপোর্টের সময় ভিডিও চালানো যায়নি: "+e.message);
+      stopExportRecording(false);
+    });
+  }
+  function onSeeked(){
+    video.removeEventListener("seeked", onSeeked);
+    beginRecording();
+  }
+  video.addEventListener("seeked", onSeeked);
+  if(Math.abs(video.currentTime-ordered[0].start)<0.01){
+    setTimeout(function(){
+      video.removeEventListener("seeked", onSeeked);
+      beginRecording();
+    }, 50);
+  }
+}
 $("cancelExportBtn").addEventListener("click", function(){ if(exporting) stopExportRecording(false); });
 $("exportDownloadBtn").addEventListener("click", function(){
   if(!exportUrl) return;
