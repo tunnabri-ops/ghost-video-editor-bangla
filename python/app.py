@@ -28,11 +28,12 @@ from PySide6.QtWidgets import (
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from editor import (  # noqa: E402
-    EditorError, add_text, apply_filter, change_speed, export_mp4,
-    merge, probe, split, trim,
+    EditorError, PRESET_LABELS, add_music, add_subtitles, add_text,
+    apply_filter, change_speed, export_mp4, merge, probe, split, trim,
 )
 
 APP_TITLE = "Ghost Video Editor Bangla — ভিডিও এডিটর"
+APP_VERSION = "1.1.0"
 DEFAULT_DIR = Path.home() / "Videos" / "GhostVideoEditorBangla"
 
 DARK_STYLE = """
@@ -88,6 +89,8 @@ class MainWindow(QMainWindow):
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.current_video: str = ""
         self.merge_clips: list[str] = []
+        self.subtitle_file: str = ""
+        self.music_file: str = ""
         self._busy = False
 
         self._bridge = _JobBridge()
@@ -106,12 +109,12 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        title = QLabel("👻 Ghost Video Editor Bangla")
+        title = QLabel(f"👻 Ghost Video Editor Bangla  v{APP_VERSION}")
         title.setObjectName("heading")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        sub = QLabel("ট্রিম • স্প্লিট • মার্জ • টেক্সট • ফিল্টার • গতি — প্রফেশনাল এডিটর")
+        sub = QLabel("ট্রিম • স্প্লিট • মার্জ • টেক্সট • ফিল্টার • গতি • সাবটাইটেল • ট্রানজিশন • মিউজিক • প্রিসেট")
         sub.setAlignment(Qt.AlignCenter)
         layout.addWidget(sub)
 
@@ -183,6 +186,20 @@ class MainWindow(QMainWindow):
         merge_run_btn.clicked.connect(self._do_merge)
         merge_btns.addWidget(merge_run_btn)
         merge_layout.addLayout(merge_btns)
+        trans_row = QHBoxLayout()
+        trans_row.addWidget(QLabel("ট্রানজিশন:"))
+        self.transition_combo = QComboBox()
+        self.transition_combo.addItems(
+            ["কোনোটা নয় (none)", "ফেড (fade)", "স্লাইড (slide)"])
+        trans_row.addWidget(self.transition_combo, stretch=1)
+        trans_row.addWidget(QLabel("দৈর্ঘ্য:"))
+        self.transition_dur = QDoubleSpinBox()
+        self.transition_dur.setRange(0.05, 2.0)
+        self.transition_dur.setValue(0.5)
+        self.transition_dur.setDecimals(2)
+        self.transition_dur.setSuffix(" s")
+        trans_row.addWidget(self.transition_dur)
+        merge_layout.addLayout(trans_row)
         layout.addWidget(merge_box)
 
         # Text overlay
@@ -203,6 +220,62 @@ class MainWindow(QMainWindow):
         text_btn.clicked.connect(self._do_add_text)
         text_layout.addWidget(text_btn)
         layout.addWidget(text_box)
+
+        # Subtitles (v1.1.0)
+        sub_box = QGroupBox("💬 সাবটাইটেল (Subtitles) — SRT ফাইল থেকে ভিডিওতে বসান")
+        sub_layout = QHBoxLayout(sub_box)
+        self.subtitle_label = QLabel("কোনো SRT ফাইল বাছাই করা হয়নি")
+        self.subtitle_label.setObjectName("info")
+        self.subtitle_label.setWordWrap(True)
+        sub_layout.addWidget(self.subtitle_label, stretch=1)
+        sub_pick_btn = QPushButton("📄 SRT বাছুন")
+        sub_pick_btn.setObjectName("secondary")
+        sub_pick_btn.clicked.connect(self._pick_subtitle)
+        sub_layout.addWidget(sub_pick_btn)
+        sub_btn = QPushButton("সাবটাইটেল বসান")
+        sub_btn.clicked.connect(self._do_subtitles)
+        sub_layout.addWidget(sub_btn)
+        layout.addWidget(sub_box)
+
+        # Background music (v1.1.0)
+        music_box = QGroupBox("🎵 ব্যাকগ্রাউন্ড মিউজিক — ভিডিওর শব্দের নিচে মিউজিক, ফেড ইন/আউট সহ")
+        music_layout = QVBoxLayout(music_box)
+        music_top = QHBoxLayout()
+        self.music_label = QLabel("কোনো মিউজিক ফাইল বাছাই করা হয়নি")
+        self.music_label.setObjectName("info")
+        self.music_label.setWordWrap(True)
+        music_top.addWidget(self.music_label, stretch=1)
+        music_pick_btn = QPushButton("🎵 মিউজিক বাছুন")
+        music_pick_btn.setObjectName("secondary")
+        music_pick_btn.clicked.connect(self._pick_music)
+        music_top.addWidget(music_pick_btn)
+        music_btn = QPushButton("মিউজিক যোগ করুন")
+        music_btn.clicked.connect(self._do_music)
+        music_top.addWidget(music_btn)
+        music_layout.addLayout(music_top)
+        music_opts = QHBoxLayout()
+        music_opts.addWidget(QLabel("ভলিউম:"))
+        self.music_vol = QSlider(Qt.Horizontal)
+        self.music_vol.setRange(0, 100)
+        self.music_vol.setValue(50)
+        self.music_vol.valueChanged.connect(self._update_music_labels)
+        music_opts.addWidget(self.music_vol, stretch=1)
+        self.music_vol_label = QLabel("0.50")
+        music_opts.addWidget(self.music_vol_label)
+        music_opts.addWidget(QLabel("ফেড ইন:"))
+        self.music_fade_in = QDoubleSpinBox()
+        self.music_fade_in.setRange(0, 10)
+        self.music_fade_in.setValue(1.0)
+        self.music_fade_in.setSuffix(" s")
+        music_opts.addWidget(self.music_fade_in)
+        music_opts.addWidget(QLabel("ফেড আউট:"))
+        self.music_fade_out = QDoubleSpinBox()
+        self.music_fade_out.setRange(0, 10)
+        self.music_fade_out.setValue(1.0)
+        self.music_fade_out.setSuffix(" s")
+        music_opts.addWidget(self.music_fade_out)
+        music_layout.addLayout(music_opts)
+        layout.addWidget(music_box)
 
         # Filters
         filter_box = QGroupBox("🎨 ফিল্টার — উজ্জ্বলতা ও কনট্রাস্ট")
@@ -244,7 +317,15 @@ class MainWindow(QMainWindow):
         speed_layout.addWidget(speed_btn)
         layout.addWidget(speed_box)
 
-        # Export + progress
+        # Export + progress (v1.1.0: export presets)
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("এক্সপোর্ট প্রিসেট:"))
+        self.preset_combo = QComboBox()
+        for key in ("original", "720p", "1080p", "vertical"):
+            self.preset_combo.addItem(PRESET_LABELS[key], key)
+        preset_row.addWidget(self.preset_combo, stretch=1)
+        layout.addLayout(preset_row)
+
         export_btn = QPushButton("⬇️ MP4 এক্সপোর্ট করুন")
         export_btn.setObjectName("success")
         export_btn.clicked.connect(self._do_export)
@@ -339,6 +420,66 @@ class MainWindow(QMainWindow):
         self.bright_label.setText(f"{self.bright_slider.value() / 100:.2f}")
         self.contrast_label.setText(f"{self.contrast_slider.value() / 100:.2f}")
 
+    def _update_music_labels(self) -> None:
+        self.music_vol_label.setText(f"{self.music_vol.value() / 100:.2f}")
+
+    def _pick_subtitle(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "SRT সাবটাইটেল বাছুন", "",
+            "SRT সাবটাইটেল (*.srt);;সব ফাইল (*)")
+        if not path:
+            return
+        try:
+            from editor import parse_srt
+            cues = parse_srt(path)
+        except EditorError as exc:
+            self._show_error("সাবটাইটেল খোলা যায়নি", str(exc))
+            return
+        self.subtitle_file = path
+        self.subtitle_label.setText(
+            f"📄 {Path(path).name} — {len(cues)}টি সাবটাইটেল")
+        self.statusBar().showMessage(f"সাবটাইটেল বাছাই হয়েছে: {path}")
+
+    def _do_subtitles(self) -> None:
+        if not self._need_video():
+            return
+        if not self.subtitle_file:
+            self._show_error("SRT নেই", "আগে একটি SRT ফাইল বাছুন।\nPlease pick an SRT file first.")
+            return
+        out = self._ask_output(self._default_name("subtitles"))
+        if not out:
+            return
+        srt = self.subtitle_file
+        self._run_job("💬 সাবটাইটেল বসানো হচ্ছে…",
+                      lambda: add_subtitles(self.current_video, out, srt))
+
+    def _pick_music(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "মিউজিক ফাইল বাছুন", "",
+            "অডিও (*.mp3 *.wav *.m4a *.ogg *.flac);;সব ফাইল (*)")
+        if not path:
+            return
+        self.music_file = path
+        self.music_label.setText(f"🎵 {Path(path).name}")
+        self.statusBar().showMessage(f"মিউজিক বাছাই হয়েছে: {path}")
+
+    def _do_music(self) -> None:
+        if not self._need_video():
+            return
+        if not self.music_file:
+            self._show_error("মিউজিক নেই", "আগে একটি মিউজিক ফাইল বাছুন।\nPlease pick a music file first.")
+            return
+        out = self._ask_output(self._default_name("music"))
+        if not out:
+            return
+        music = self.music_file
+        volume = self.music_vol.value() / 100
+        fade_in = self.music_fade_in.value()
+        fade_out = self.music_fade_out.value()
+        self._run_job("🎵 মিউজিক যোগ করা হচ্ছে…",
+                      lambda: add_music(self.current_video, out, music,
+                                        volume, fade_in, fade_out))
+
     # -- slots -------------------------------------------------------------
     def _pick_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "ভিডিও বাছুন", "", VIDEO_FILTER)
@@ -430,8 +571,9 @@ class MainWindow(QMainWindow):
         out = self._ask_output(self._default_name("export"))
         if not out:
             return
+        preset = self.preset_combo.currentData() or "original"
         self._run_job("⬇️ এক্সপোর্ট হচ্ছে…",
-                      lambda: export_mp4(self.current_video, out))
+                      lambda: export_mp4(self.current_video, out, preset))
 
     def _add_merge_clip(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "ক্লিপ বাছুন", "", VIDEO_FILTER)
@@ -457,7 +599,10 @@ class MainWindow(QMainWindow):
         if not out:
             return
         clips = list(self.merge_clips)
-        self._run_job("🔗 মার্জ হচ্ছে…", lambda: merge(clips, out))
+        transition = ["none", "fade", "slide"][self.transition_combo.currentIndex()]
+        trans_dur = self.transition_dur.value()
+        self._run_job("🔗 মার্জ হচ্ছে…",
+                      lambda: merge(clips, out, transition, trans_dur))
 
 
 def main() -> int:

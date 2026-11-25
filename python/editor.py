@@ -17,16 +17,23 @@ Public API:
     probe(input) -> dict with duration / width / height / fps / has_audio
     trim(input, output, start, end)
     split(input, output1, output2, at_seconds)
-    merge([inputs], output)
+    merge([inputs], output, transition="none", transition_duration=0.5)
     add_text(input, output, text, position, font_size)
     apply_filter(input, output, brightness, contrast)
     change_speed(input, output, factor)
-    export_mp4(input, output)
+    export_mp4(input, output, preset="original")
+    parse_srt(source) -> list of subtitle cues
+    subtitle_at(cues, t) -> cue text active at time t (or "")
+    add_subtitles(input, output, srt_source, font_size=40, position="bottom")
+    add_music(input, output, music_path, music_volume=0.5,
+              fade_in=1.0, fade_out=1.0)
+    apply_preset(input, output, preset)
 """
 
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -44,15 +51,280 @@ class EditorError(Exception):
 # ---------------------------------------------------------------------------
 
 def ffmpeg_exe() -> str:
-    """Path to the bundled ffmpeg binary (imageio-ffmpeg)."""
+    """Path to the ffmpeg binary.
+
+    First choice is the binary bundled with ``imageio-ffmpeg`` (no system
+    install needed); if that package is missing, fall back to a system
+    ``ffmpeg`` on PATH (used by the headless tests in this VM).
+    """
     try:
         import imageio_ffmpeg
-    except ImportError as exc:  # noqa: BLE001
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        system = shutil.which("ffmpeg")
+        if system:
+            return system
         raise EditorError(
             "ffmpeg পাওয়া যায়নি — imageio-ffmpeg ইনস্টল করুন।\n"
             "ffmpeg not found — please install imageio-ffmpeg."
-        ) from exc
-    return imageio_ffmpeg.get_ffmpeg_exe()
+        )
+
+
+# ---------------------------------------------------------------------------
+# Export presets (v1.1.0)
+# ---------------------------------------------------------------------------
+
+#: preset name -> (width, height); "original" keeps the source size.
+EXPORT_PRESETS: dict = {
+    "original": None,
+    "720p": (1280, 720),
+    "1080p": (1920, 1080),
+    "vertical": (1080, 1920),  # 9:16 — Shorts / Reels
+}
+
+PRESET_LABELS = {
+    "original": "আসল (Original)",
+    "720p": "720p HD (1280×720)",
+    "1080p": "1080p Full HD (1920×1080)",
+    "vertical": "ভার্টিকাল 9:16 (1080×1920)",
+}
+
+
+def preset_resolution(preset: str) -> Optional[tuple]:
+    """(width, height) for a preset name, or None for "original"."""
+    if preset not in EXPORT_PRESETS:
+        raise EditorError(
+            f"অজানা প্রিসেট: {preset} — 720p / 1080p / vertical / original।\n"
+            f"Unknown preset: {preset} — use 720p / 1080p / vertical / original."
+        )
+    return EXPORT_PRESETS[preset]
+
+
+def _preset_filter(preset: str) -> Optional[str]:
+    """scale+pad filter for a preset (None = keep original size).
+
+    Scales the frame to fit inside the target and pads the rest with
+    black, so nothing is cropped and the aspect ratio is never stretched.
+    """
+    target = preset_resolution(preset)
+    if target is None:
+        return None
+    width, height = target
+    return (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SRT subtitles (v1.1.0)
+# ---------------------------------------------------------------------------
+
+_SRT_TIME_RE = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
+
+
+def parse_srt_time(text: str) -> float:
+    """Parse an SRT timestamp ("00:01:02,500" or "00:01:02.500") to seconds."""
+    match = _SRT_TIME_RE.search(text.strip())
+    if not match:
+        raise EditorError(
+            f"সাবটাইটেলের সময় বোঝা যায়নি: {text}\n"
+            f"Could not parse subtitle timestamp: {text}"
+        )
+    hours, minutes, seconds, millis = match.groups()
+    return (int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+            + int(millis) / 1000.0)
+
+
+def parse_srt(source: Union[str, Path]) -> List[dict]:
+    """Parse SRT subtitles from a file path or from raw SRT text.
+
+    Returns a list of ``{"index", "start", "end", "text"}`` dicts, sorted
+    by start time. ``source`` is treated as a file path when it names an
+    existing file, otherwise as the SRT text itself.
+    """
+    if isinstance(source, Path) or (
+        isinstance(source, str) and Path(source).exists()
+    ):
+        text = Path(source).read_text(encoding="utf-8-sig")
+    else:
+        text = str(source)
+    cues: List[dict] = []
+    # Blocks are separated by blank lines.
+    for block in re.split(r"\r?\n\r?\n", text.strip()):
+        lines = [line.strip() for line in block.strip().splitlines()
+                 if line.strip()]
+        if len(lines) < 2:
+            continue
+        # First line may be the cue number; find the timing line.
+        timing_idx = None
+        for i, line in enumerate(lines):
+            if "-->" in line:
+                timing_idx = i
+                break
+        if timing_idx is None:
+            continue
+        start_s, _, end_s = lines[timing_idx].partition("-->")
+        try:
+            start = parse_srt_time(start_s)
+            end = parse_srt_time(end_s)
+        except EditorError:
+            continue
+        cue_text = "\n".join(lines[timing_idx + 1:]).strip()
+        if end <= start or not cue_text:
+            continue
+        index = 0
+        if timing_idx > 0 and lines[0].isdigit():
+            index = int(lines[0])
+        cues.append({"index": index, "start": start, "end": end,
+                     "text": cue_text})
+    cues.sort(key=lambda c: c["start"])
+    if not cues:
+        raise EditorError(
+            "SRT ফাইলে কোনো সাবটাইটেল পাওয়া যায়নি।\n"
+            "No subtitles found in the SRT file."
+        )
+    return cues
+
+
+def subtitle_at(cues: List[dict], t: float) -> str:
+    """Text of the cue active at time ``t`` (seconds), or "" if none."""
+    for cue in cues:
+        if cue["start"] <= t < cue["end"]:
+            return cue["text"]
+    return ""
+
+
+def add_subtitles(input_path: PathLike, output_path: PathLike,
+                  srt_source: Union[str, Path],
+                  font_size: int = 40,
+                  position: str = "bottom") -> str:
+    """Burn SRT subtitles into the video (Pillow-rendered, Bangla-safe).
+
+    Each cue is rendered to a PNG with Pillow (same shaping as text
+    overlay) and composited with an ``overlay`` filter enabled only
+    between the cue's start and end times. Returns the output path.
+    """
+    src = _check_input(input_path)
+    dst = _check_output(output_path)
+    if position not in ("top", "center", "bottom"):
+        raise EditorError(
+            "অবস্থান top / center / bottom হতে হবে।\n"
+            "Position must be top, center or bottom."
+        )
+    cues = parse_srt(srt_source)
+    info = probe(src)
+    with tempfile.TemporaryDirectory(prefix="ghost-editor-subs-") as tmpdir:
+        tmpdir = Path(tmpdir)
+        pngs: List[Path] = []
+        for i, cue in enumerate(cues):
+            # Multi-line cue text: render_text_png handles one string;
+            # newlines are kept by Pillow's textbbox/draw.
+            png = render_text_png(cue["text"], font_size, info["width"])
+            dest = tmpdir / f"cue{i}.png"
+            png.rename(dest)
+            pngs.append(dest)
+        y_expr = {
+            "top": "20",
+            "center": "(main_h-overlay_h)/2",
+            "bottom": "main_h-overlay_h-20",
+        }[position]
+        # Build the chained overlay filter.
+        args: List[str] = ["-i", str(src)]
+        for png in pngs:
+            args += ["-i", str(png)]
+        chain = ""
+        for i, cue in enumerate(cues):
+            in_label = "[0:v]" if i == 0 else f"[v{i - 1}]"
+            out_label = f"[v{i}]" if i < len(cues) - 1 else "[vout]"
+            chain += (
+                f"{in_label}[{i + 1}:v]overlay=(main_w-overlay_w)/2:{y_expr}:"
+                f"enable='between(t,{cue['start']:.3f},{cue['end']:.3f})'"
+                f"{out_label};"
+            )
+        chain = chain.rstrip(";")
+        args += ["-filter_complex", chain,
+                 "-map", "[vout]", "-map", "0:a?",
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", "-movflags", "+faststart", str(dst)]
+        _run_ffmpeg(args, "সাবটাইটেল (Subtitles)")
+    return str(dst)
+
+
+# ---------------------------------------------------------------------------
+# Background music (v1.1.0)
+# ---------------------------------------------------------------------------
+
+def add_music(input_path: PathLike, output_path: PathLike,
+              music_path: PathLike, music_volume: float = 0.5,
+              fade_in: float = 1.0, fade_out: float = 1.0) -> str:
+    """Mix a music track under the video's own audio, with fade in/out.
+
+    The music file is looped to cover the whole video, faded in over
+    ``fade_in`` seconds and faded out over the last ``fade_out`` seconds.
+    If the video has no audio track, the music becomes the audio track.
+    Returns the output path.
+    """
+    src = _check_input(input_path)
+    music = _check_input(music_path)
+    dst = _check_output(output_path)
+    if not 0.0 <= music_volume <= 1.0:
+        raise EditorError(
+            "মিউজিকের ভলিউম 0 থেকে 1 এর মধ্যে হতে হবে।\n"
+            "Music volume must be between 0 and 1."
+        )
+    if fade_in < 0 or fade_out < 0:
+        raise EditorError(
+            "ফেডের সময় 0 বা তার বেশি হতে হবে।\n"
+            "Fade times must be 0 or more."
+        )
+    info = probe(src)
+    duration = info["duration"]
+    fade_out_start = max(0.0, duration - fade_out)
+    music_filter = (
+        f"afade=t=in:st=0:d={fade_in:.3f},"
+        f"afade=t=out:st={fade_out_start:.3f}:d={fade_out:.3f},"
+        f"volume={music_volume:.3f}"
+    )
+    args: List[str] = [
+        "-i", str(src), "-stream_loop", "-1", "-i", str(music),
+    ]
+    if info["has_audio"]:
+        filt = (
+            f"[0:a]volume=1.0[a0];"
+            f"[1:a]{music_filter}[a1];"
+            f"[a0][a1]amix=inputs=2:duration=first:"
+            f"dropout_transition=0[a]"
+        )
+        args += ["-filter_complex", filt, "-map", "0:v", "-map", "[a]"]
+    else:
+        args += ["-filter_complex", f"[1:a]{music_filter}[a]",
+                 "-map", "0:v", "-map", "[a]"]
+    args += ["-t", f"{duration:.3f}",
+             "-c:v", "copy", "-c:a", "aac",
+             "-movflags", "+faststart", str(dst)]
+    _run_ffmpeg(args, "মিউজিক (Music)")
+    return str(dst)
+
+
+def apply_preset(input_path: PathLike, output_path: PathLike,
+                 preset: str = "720p") -> str:
+    """Re-encode a video at an export preset resolution (see EXPORT_PRESETS).
+
+    Returns the output path.
+    """
+    src = _check_input(input_path)
+    dst = _check_output(output_path)
+    filt = _preset_filter(preset)
+    if filt is None:
+        return export_mp4(src, dst)
+    _run_ffmpeg(
+        ["-i", str(src), "-vf", filt,
+         "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         "-c:a", "copy", "-movflags", "+faststart", str(dst)],
+        "প্রিসেট (Preset)",
+    )
+    return str(dst)
 
 
 def _run_ffmpeg(args: List[str], what: str) -> None:
@@ -209,17 +481,35 @@ def split(input_path: PathLike, output1: PathLike, output2: PathLike,
     return out1, out2
 
 
-def merge(inputs: List[PathLike], output_path: PathLike) -> str:
+def merge(inputs: List[PathLike], output_path: PathLike,
+          transition: str = "none",
+          transition_duration: float = 0.5) -> str:
     """Join several videos into one MP4 (re-encoded, so mixed sizes work).
 
     Uses the concat demuxer with re-encode: inputs are first normalised
     to the same codec / size / fps, then concatenated.
+
+    With ``transition="fade"`` or ``"slide"`` the clips are joined with
+    ffmpeg's ``xfade`` filter instead: the last ``transition_duration``
+    seconds of each clip blend into the next one (fade = cross-dissolve,
+    slide = slide-left wipe). Audio, when every clip has it, is joined
+    with ``acrossfade``; otherwise the output has no audio track.
     Returns the output path.
     """
     if not inputs or len(inputs) < 2:
         raise EditorError(
             "মার্জ করতে অন্তত ২টি ভিডিও লাগবে।\n"
             "Merging needs at least 2 videos."
+        )
+    if transition not in ("none", "fade", "slide"):
+        raise EditorError(
+            "ট্রানজিশন none / fade / slide হতে হবে।\n"
+            "Transition must be none, fade or slide."
+        )
+    if transition != "none" and not 0.05 <= transition_duration <= 2.0:
+        raise EditorError(
+            "ট্রানজিশনের দৈর্ঘ্য 0.05 থেকে 2 সেকেন্ড হতে হবে।\n"
+            "Transition duration must be between 0.05 and 2 seconds."
         )
     paths = [_check_input(p) for p in inputs]
     dst = _check_output(output_path)
@@ -234,8 +524,13 @@ def merge(inputs: List[PathLike], output_path: PathLike) -> str:
     with tempfile.TemporaryDirectory(prefix="ghost-editor-merge-") as tmpdir:
         tmpdir = Path(tmpdir)
         normed: List[Path] = []
+        durations: List[float] = []
+        has_audio_flags: List[bool] = []
         for i, src in enumerate(paths):
             tmp = tmpdir / f"part{i}.mp4"
+            info = probe(src)
+            durations.append(info["duration"])
+            has_audio_flags.append(info["has_audio"])
             _run_ffmpeg(
                 ["-i", str(src),
                  "-vf", f"scale={width}:{height},fps={fps},format=yuv420p",
@@ -245,15 +540,57 @@ def merge(inputs: List[PathLike], output_path: PathLike) -> str:
                 "মার্জ — প্রস্তুতি (Merge — normalising)",
             )
             normed.append(tmp)
-        concat_file = tmpdir / "concat.txt"
-        concat_file.write_text(
-            "".join(f"file '{p}'\n" for p in normed), encoding="utf-8"
-        )
-        _run_ffmpeg(
-            ["-f", "concat", "-safe", "0", "-i", str(concat_file),
-             "-c", "copy", "-movflags", "+faststart", str(dst)],
-            "মার্জ (Merge)",
-        )
+        if transition == "none":
+            concat_file = tmpdir / "concat.txt"
+            concat_file.write_text(
+                "".join(f"file '{p}'\n" for p in normed), encoding="utf-8"
+            )
+            _run_ffmpeg(
+                ["-f", "concat", "-safe", "0", "-i", str(concat_file),
+                 "-c", "copy", "-movflags", "+faststart", str(dst)],
+                "মার্জ (Merge)",
+            )
+            return str(dst)
+        # --- xfade path -------------------------------------------------
+        tdur = float(transition_duration)
+        for d in durations:
+            if d <= tdur:
+                raise EditorError(
+                    "ট্রানজিশনের চেয়ে ছোট ক্লিপ আছে — ক্লিপের দৈর্ঘ্য "
+                    "ট্রানজিশনের দৈর্ঘ্যের চেয়ে বড় হতে হবে।\n"
+                    "A clip is shorter than the transition — every clip "
+                    "must be longer than the transition duration."
+                )
+        xfade_type = "fade" if transition == "fade" else "slideleft"
+        args: List[str] = []
+        for p in normed:
+            args += ["-i", str(p)]
+        chain = ""
+        # Video: [0:v][1:v]xfade=...:offset=...[x0]; [x0][2:v]xfade...[x1]...
+        offset = durations[0] - tdur
+        chain += f"[0:v][1:v]xfade=transition={xfade_type}:duration={tdur:.3f}:offset={offset:.3f}[x0];"
+        for i in range(2, len(normed)):
+            offset = sum(durations[:i]) - i * tdur
+            chain += (f"[x{i - 2}][{i}:v]xfade=transition={xfade_type}:"
+                      f"duration={tdur:.3f}:offset={offset:.3f}[x{i - 1}];")
+        last_v = f"[x{len(normed) - 2}]"
+        all_audio = all(has_audio_flags)
+        if all_audio:
+            # Audio: [0:a][1:a]acrossfade=d=...[a0]; [a0][2:a]acrossfade...[a1]...
+            chain += f"[0:a][1:a]acrossfade=d={tdur:.3f}[a0];"
+            for i in range(2, len(normed)):
+                chain += (f"[a{i - 2}][{i}:a]acrossfade=d={tdur:.3f}"
+                          f"[a{i - 1}];")
+            last_a = f"[a{len(normed) - 2}]"
+            chain = chain.rstrip(";")
+            args += ["-filter_complex", chain,
+                     "-map", last_v, "-map", last_a]
+        else:
+            chain = chain.rstrip(";")
+            args += ["-filter_complex", chain, "-map", last_v, "-an"]
+        args += ["-c:v", "libx264", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", "-movflags", "+faststart", str(dst)]
+        _run_ffmpeg(args, "মার্জ — ট্রানজিশন (Merge — transition)")
     return str(dst)
 
 
@@ -423,35 +760,48 @@ def change_speed(input_path: PathLike, output_path: PathLike,
     return str(dst)
 
 
-def export_mp4(input_path: PathLike, output_path: PathLike) -> str:
+def export_mp4(input_path: PathLike, output_path: PathLike,
+               preset: str = "original") -> str:
     """Re-encode any supported video to H.264 MP4 (yuv420p, faststart).
 
-    Returns the output path.
+    ``preset`` is one of EXPORT_PRESETS ("original" / "720p" / "1080p" /
+    "vertical"): it scales the frame to fit the target size and pads the
+    rest with black, so nothing is cropped. Returns the output path.
     """
     src = _check_input(input_path)
     dst = _check_output(output_path)
     if dst.suffix.lower() != ".mp4":
         dst = dst.with_suffix(".mp4")
-    _run_ffmpeg(
-        ["-i", str(src),
-         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-         "-c:a", "aac", "-movflags", "+faststart",
-         str(dst)],
-        "এক্সপোর্ট (Export)",
-    )
+    filt = _preset_filter(preset)
+    args: List[str] = ["-i", str(src)]
+    if filt:
+        args += ["-vf", filt]
+    args += ["-c:v", "libx264", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-movflags", "+faststart",
+             str(dst)]
+    _run_ffmpeg(args, "এক্সপোর্ট (Export)")
     return str(dst)
 
 
 __all__ = [
     "EditorError",
+    "EXPORT_PRESETS",
+    "PRESET_LABELS",
+    "add_music",
+    "add_subtitles",
     "add_text",
     "apply_filter",
+    "apply_preset",
     "change_speed",
     "export_mp4",
     "ffmpeg_exe",
     "merge",
+    "parse_srt",
+    "parse_srt_time",
+    "preset_resolution",
     "probe",
     "render_text_png",
     "split",
+    "subtitle_at",
     "trim",
 ]
