@@ -24,7 +24,8 @@ contextBridge.exposeInMainWorld('ghostVideoEditor', {
   // Split at a time: { input, at, output?, output2? }. Returns { ok, path, path2, error? }.
   splitVideo: (payload) => ipcRenderer.invoke('split-video', payload),
 
-  // Merge clips in order: { inputs, output? }. Returns { ok, path, error? }.
+  // Merge clips in order: { inputs, output?, transition ('none'|'fade'|'slide'),
+  // transitionDuration, preset }. Returns { ok, path, error? }.
   mergeVideos: (payload) => ipcRenderer.invoke('merge-videos', payload),
 
   // Burn text on the video: { input, text, textPosition, textSize, output? }.
@@ -37,10 +38,27 @@ contextBridge.exposeInMainWorld('ghostVideoEditor', {
   // Speed: { input, speed (0.25..4), mute, output? }. Audio pitch follows via atempo.
   changeSpeed: (payload) => ipcRenderer.invoke('change-speed', payload),
 
+  // Pick an SRT subtitle file. Returns { cancelled, path }.
+  pickSubtitle: () => ipcRenderer.invoke('pick-subtitle'),
+
+  // Pick a music/audio file. Returns { cancelled, path }.
+  pickMusic: () => ipcRenderer.invoke('pick-music'),
+
+  // Read an SRT file as text. Returns { ok, text, error? }.
+  readSubtitleFile: (filePath) => ipcRenderer.invoke('read-subtitle-file', filePath),
+
+  // Burn SRT subtitles into the video: { input, subtitlePath, fontSize, output? }.
+  addSubtitles: (payload) => ipcRenderer.invoke('add-subtitles', payload),
+
+  // Mix background music under the clip audio:
+  // { input, musicPath, musicVolume (0..1), fadeIn, fadeOut, output? }.
+  addMusic: (payload) => ipcRenderer.invoke('add-music', payload),
+
   // Full export with all current settings in one ffmpeg pass:
   // { input, start, end, speed, brightness, contrast, text, textPosition,
-  //   textSize, mute, output? }. Progress arrives via onExportProgress,
-  // then onExportDone / onExportError.
+  //   textSize, mute, output?, subtitlePath, subtitleFontSize,
+  //   musicPath, musicVolume, fadeIn, fadeOut, preset }. Progress arrives
+  // via onExportProgress, then onExportDone / onExportError.
   exportVideo: (payload) => ipcRenderer.invoke('export-video', payload),
 
   // Ask where to save: { defaultName }. Returns { cancelled, path }.

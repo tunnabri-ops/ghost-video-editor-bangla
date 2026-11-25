@@ -21,6 +21,39 @@ const RELEASES_URL = `https://github.com/${REPO}/releases`;
 const LATEST_API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
 
 const VIDEO_EXTENSIONS = ['mp4', 'mkv', 'mov', 'webm', 'avi', 'm4v', 'flv'];
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'wma'];
+
+// v1.1.0 — export presets: name -> [width, height] (null = original size).
+const EXPORT_PRESETS = {
+  original: null,
+  '720p': [1280, 720],
+  '1080p': [1920, 1080],
+  vertical: [1080, 1920], // 9:16 — Shorts / Reels
+};
+
+function presetFilter(preset) {
+  // Scale to fit inside the target, pad the rest with black — never crops.
+  const target = EXPORT_PRESETS[preset];
+  if (!target) return null;
+  const [w, h] = target;
+  return `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+}
+
+function escapeSubtitlesPath(filePath) {
+  // ffmpeg subtitles filter: forward slashes, escape ':' and '\''.
+  return String(filePath).replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
+}
+
+function subtitlesFilter(srtPath, fontSize) {
+  const size = Math.max(12, Math.min(200, Number(fontSize) || 40));
+  return `subtitles='${escapeSubtitlesPath(srtPath)}':force_style='Fontsize=${size}'`;
+}
+
+async function probeHasAudio(filePath) {
+  const result = await runFfmpeg(['-hide_banner', '-i', filePath]);
+  return /Stream #\d+:\d+[^:]*: Audio:/.test(result.stderr);
+}
 
 // 32x32 white ghost on transparent background (embedded, no download).
 const TRAY_ICON_BASE64 =
@@ -345,6 +378,38 @@ ipcMain.handle('pick-videos', async () => {
   return { cancelled: false, paths: filePaths };
 });
 
+// ---- IPC: pick subtitle / music files (v1.1.0) ---------------------------
+ipcMain.handle('pick-subtitle', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'SRT subtitles', extensions: ['srt'] }],
+  });
+  if (canceled || !filePaths.length) return { cancelled: true, path: null };
+  return { cancelled: false, path: filePaths[0] };
+});
+
+ipcMain.handle('pick-music', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'Audio files', extensions: AUDIO_EXTENSIONS }],
+  });
+  if (canceled || !filePaths.length) return { cancelled: true, path: null };
+  return { cancelled: false, path: filePaths[0] };
+});
+
+// Read an SRT file as text (renderer parses the cues for the preview).
+ipcMain.handle('read-subtitle-file', async (_event, filePath) => {
+  if (!filePath || typeof filePath !== 'string' || !fs.existsSync(filePath)) {
+    return { ok: false, error: 'file-not-found' };
+  }
+  try {
+    const text = fs.readFileSync(filePath, 'utf8');
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
 // ---- IPC: video info ------------------------------------------------------
 // ffprobe is NOT shipped with ffmpeg-static, so info comes from
 // `ffmpeg -i <file>` (stderr) — duration + video stream. Honest and enough.
@@ -420,29 +485,121 @@ ipcMain.handle('split-video', async (_event, payload) => {
 });
 
 // ---- IPC: merge -----------------------------------------------------------
-// Concat demuxer with -c copy (fast, no re-encode). Works when all clips
-// share codec/container; mismatched clips fail honestly with ffmpeg's error.
+// Default: concat demuxer with -c copy (fast, no re-encode). Works when all
+// clips share codec/container; mismatched clips fail honestly.
+// v1.1.0: with transition ("fade"/"slide") the clips are normalised and
+// joined with ffmpeg's xfade (+ acrossfade for audio). With a preset the
+// output is re-encoded at that resolution instead of copied.
 ipcMain.handle('merge-videos', async (_event, payload) => {
-  const { inputs, output } = payload || {};
+  const { inputs, output, transition, transitionDuration, preset } = payload || {};
   if (!Array.isArray(inputs) || inputs.length < 2) return { ok: false, error: 'need-two-clips' };
   if (inputs.some((p) => !fs.existsSync(p))) return { ok: false, error: 'file-not-found' };
   if (!ffmpegAvailable()) return { ok: false, error: 'ffmpeg-missing' };
+  const trans = transition || 'none';
+  if (!['none', 'fade', 'slide'].includes(trans)) return { ok: false, error: 'invalid-transition' };
+  const tDur = trans === 'none' ? 0 : Math.max(0.05, Math.min(2, Number(transitionDuration) || 0.5));
+  const pFilter = preset && preset !== 'original' ? presetFilter(preset) : null;
+  if (preset && preset !== 'original' && !pFilter) return { ok: false, error: 'invalid-preset' };
   const outPath = output || (await askOutputPath(null, 'ghost-video-merged.mp4'));
   if (!outPath) return { ok: false, cancelled: true, error: null };
-  const listPath = path.join(os.tmpdir(), `gve-merge-${Date.now()}.txt`);
-  const listContent = inputs.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-  fs.writeFileSync(listPath, listContent, 'utf8');
+
+  if (trans === 'none' && !pFilter) {
+    const listPath = path.join(os.tmpdir(), `gve-merge-${Date.now()}.txt`);
+    const listContent = inputs.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
+    fs.writeFileSync(listPath, listContent, 'utf8');
+    try {
+      const total = (await Promise.all(inputs.map((p) => probeDuration(p))))
+        .reduce((sum, d) => sum + (d || 0), 0);
+      const result = await runFfmpeg(
+        ['-hide_banner', '-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outPath],
+        withProgress(total || null, _event)
+      );
+      if (!result.ok) return { ok: false, error: result.error, detail: result.stderr.slice(-500) };
+      return { ok: true, path: outPath };
+    } finally {
+      try { fs.unlinkSync(listPath); } catch (_err) { /* temp file cleanup */ }
+    }
+  }
+
+  // Re-encode path: normalise to the first clip's size/fps, then join.
+  const infos = await Promise.all(inputs.map(async (p) => {
+    const r = await runFfmpeg(['-hide_banner', '-i', p]);
+    return { duration: parseDurationFromFfmpegOutput(r.stderr), video: parseVideoStream(r.stderr), hasAudio: /Stream #\d+:\d+[^:]*: Audio:/.test(r.stderr) };
+  }));
+  const first = infos[0];
+  if (!first.video.width) return { ok: false, error: 'file-not-found' };
+  let width = first.video.width - (first.video.width % 2);
+  let height = first.video.height - (first.video.height % 2);
+  const fps = first.video.fps || 25;
+  if (trans !== 'none') {
+    for (const info of infos) {
+      if (!info.duration || info.duration <= tDur) return { ok: false, error: 'clip-too-short' };
+    }
+  }
+  const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'gve-merge-'));
   try {
-    const total = (await Promise.all(inputs.map((p) => probeDuration(p))))
-      .reduce((sum, d) => sum + (d || 0), 0);
-    const result = await runFfmpeg(
-      ['-hide_banner', '-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outPath],
-      withProgress(total || null, _event)
-    );
+    const normed = [];
+    for (let i = 0; i < inputs.length; i++) {
+      const tmp = path.join(tmpdir, `part${i}.mp4`);
+      const r = await runFfmpeg(
+        ['-hide_banner', '-y', '-i', inputs[i],
+         '-vf', `scale=${width}:${height},fps=${fps},format=yuv420p`,
+         '-c:v', 'libx264', '-c:a', 'aac', '-video_track_timescale', '90000', tmp]
+      );
+      if (!r.ok) return { ok: false, error: r.error, detail: r.stderr.slice(-500) };
+      normed.push(tmp);
+    }
+    const total = infos.reduce((sum, d) => sum + (d.duration || 0), 0);
+    if (trans === 'none') {
+      // Preset only: concat demuxer + re-encode at the preset size.
+      const listPath = path.join(tmpdir, 'concat.txt');
+      fs.writeFileSync(listPath, normed.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'), 'utf8');
+      const result = await runFfmpeg(
+        ['-hide_banner', '-y', '-f', 'concat', '-safe', '0', '-i', listPath,
+         '-vf', pFilter, '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+         '-c:a', 'aac', '-movflags', '+faststart', outPath],
+        withProgress(total || null, _event)
+      );
+      if (!result.ok) return { ok: false, error: result.error, detail: result.stderr.slice(-500) };
+      return { ok: true, path: outPath };
+    }
+    // xfade path.
+    const xfadeType = trans === 'fade' ? 'fade' : 'slideleft';
+    const args = [];
+    normed.forEach((p) => args.push('-i', p));
+    let chain = '';
+    let offset = infos[0].duration - tDur;
+    chain += `[0:v][1:v]xfade=transition=${xfadeType}:duration=${tDur.toFixed(3)}:offset=${offset.toFixed(3)}[x0];`;
+    for (let i = 2; i < normed.length; i++) {
+      offset = infos.slice(0, i).reduce((s, d) => s + (d.duration || 0), 0) - i * tDur;
+      chain += `[x${i - 2}][${i}:v]xfade=transition=${xfadeType}:duration=${tDur.toFixed(3)}:offset=${offset.toFixed(3)}[x${i - 1}];`;
+    }
+    const lastV = `[x${normed.length - 2}]`;
+    const allAudio = infos.every((d) => d.hasAudio);
+    let mapV = lastV;
+    if (pFilter) {
+      chain += `${lastV}${pFilter}[vout];`;
+      mapV = '[vout]';
+    }
+    if (allAudio) {
+      chain += '[0:a][1:a]acrossfade=d=' + tDur.toFixed(3) + '[a0];';
+      for (let i = 2; i < normed.length; i++) {
+        chain += `[a${i - 2}][${i}:a]acrossfade=d=${tDur.toFixed(3)}[a${i - 1}];`;
+      }
+      const lastA = `[a${normed.length - 2}]`;
+      chain = chain.replace(/;$/, '');
+      args.push('-filter_complex', chain, '-map', mapV, '-map', lastA);
+    } else {
+      chain = chain.replace(/;$/, '');
+      args.push('-filter_complex', chain, '-map', mapV, '-an');
+    }
+    args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
+      '-movflags', '+faststart', outPath);
+    const result = await runFfmpeg(args, withProgress(total - (normed.length - 1) * tDur || null, _event));
     if (!result.ok) return { ok: false, error: result.error, detail: result.stderr.slice(-500) };
     return { ok: true, path: outPath };
   } finally {
-    try { fs.unlinkSync(listPath); } catch (_err) { /* temp file cleanup */ }
+    try { fs.rmSync(tmpdir, { recursive: true, force: true }); } catch (_err) { /* cleanup */ }
   }
 });
 
@@ -461,6 +618,60 @@ ipcMain.handle('add-text', async (_event, payload) => {
     ['-hide_banner', '-y', '-i', input, '-vf', built.filter, '-c:a', 'copy', outPath],
     withProgress(duration, _event)
   );
+  if (!result.ok) return { ok: false, error: result.error, detail: result.stderr.slice(-500) };
+  return { ok: true, path: outPath };
+});
+
+// ---- IPC: subtitles (v1.1.0) --------------------------------------------
+// Burns an SRT file into the video with ffmpeg's subtitles filter
+// (libass shapes Bangla correctly). Audio is copied untouched.
+ipcMain.handle('add-subtitles', async (_event, payload) => {
+  const { input, subtitlePath, fontSize, output } = payload || {};
+  if (!input || !fs.existsSync(input)) return { ok: false, error: 'file-not-found' };
+  if (!subtitlePath || !fs.existsSync(subtitlePath)) return { ok: false, error: 'subtitle-missing' };
+  if (!ffmpegAvailable()) return { ok: false, error: 'ffmpeg-missing' };
+  const outPath = output || (await askOutputPath(null, suffixName(input, '-subtitles')));
+  if (!outPath) return { ok: false, cancelled: true, error: null };
+  const duration = await probeDuration(input);
+  const result = await runFfmpeg(
+    ['-hide_banner', '-y', '-i', input, '-vf', subtitlesFilter(subtitlePath, fontSize),
+     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'copy',
+     '-movflags', '+faststart', outPath],
+    withProgress(duration, _event)
+  );
+  if (!result.ok) return { ok: false, error: result.error, detail: result.stderr.slice(-500) };
+  return { ok: true, path: outPath };
+});
+
+// ---- IPC: background music (v1.1.0) ---------------------------------------
+// Mixes a music file under the clip's own audio (looped to the video
+// length, faded in/out). If the video has no audio, the music is the audio.
+ipcMain.handle('add-music', async (_event, payload) => {
+  const { input, musicPath, musicVolume, fadeIn, fadeOut, output } = payload || {};
+  if (!input || !fs.existsSync(input)) return { ok: false, error: 'file-not-found' };
+  if (!musicPath || !fs.existsSync(musicPath)) return { ok: false, error: 'music-missing' };
+  if (!ffmpegAvailable()) return { ok: false, error: 'ffmpeg-missing' };
+  const vol = Number(musicVolume);
+  if (Number.isNaN(vol) || vol < 0 || vol > 1) return { ok: false, error: 'invalid-volume' };
+  const fi = Math.max(0, Number(fadeIn) || 0);
+  const fo = Math.max(0, Number(fadeOut) || 0);
+  const outPath = output || (await askOutputPath(null, suffixName(input, '-music')));
+  if (!outPath) return { ok: false, cancelled: true, error: null };
+  const duration = await probeDuration(input);
+  const hasAudio = await probeHasAudio(input);
+  const fadeOutStart = Math.max(0, (duration || 0) - fo);
+  const musicFilter = `afade=t=in:st=0:d=${fi.toFixed(3)},afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fo.toFixed(3)},volume=${vol.toFixed(3)}`;
+  const args = ['-hide_banner', '-y', '-i', input, '-stream_loop', '-1', '-i', musicPath];
+  if (hasAudio) {
+    args.push('-filter_complex',
+      `[0:a]volume=1.0[a0];[1:a]${musicFilter}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]`,
+      '-map', '0:v', '-map', '[a]');
+  } else {
+    args.push('-filter_complex', `[1:a]${musicFilter}[a]`, '-map', '0:v', '-map', '[a]');
+  }
+  args.push('-t', String(duration), '-c:v', 'copy', '-c:a', 'aac',
+    '-movflags', '+faststart', outPath);
+  const result = await runFfmpeg(args, withProgress(duration, _event));
   if (!result.ok) return { ok: false, error: result.error, detail: result.stderr.slice(-500) };
   return { ok: true, path: outPath };
 });
@@ -511,10 +722,14 @@ ipcMain.handle('change-speed', async (_event, payload) => {
 
 // ---- IPC: full export (all current settings, one pass) --------------------
 // payload: { input, start, end, speed, brightness, contrast, text,
-//            textPosition, textSize, mute, output }
+//            textPosition, textSize, mute, output,
+//            subtitlePath, subtitleFontSize,            // v1.1.0
+//            musicPath, musicVolume, fadeIn, fadeOut,   // v1.1.0
+//            preset }                                    // v1.1.0
 // Emits export-progress while running, then export-done / export-error.
 ipcMain.handle('export-video', async (event, payload) => {
-  const { input, start, end, speed, brightness, contrast, text, textPosition: position, textSize, mute, output } = payload || {};
+  const { input, start, end, speed, brightness, contrast, text, textPosition: position, textSize, mute, output,
+    subtitlePath, subtitleFontSize, musicPath, musicVolume, fadeIn, fadeOut, preset } = payload || {};
   if (!input || !fs.existsSync(input)) {
     const err = { error: 'file-not-found' };
     if (mainWindow) mainWindow.webContents.send('export-error', err);
@@ -522,6 +737,16 @@ ipcMain.handle('export-video', async (event, payload) => {
   }
   if (!ffmpegAvailable()) {
     const err = { error: 'ffmpeg-missing' };
+    if (mainWindow) mainWindow.webContents.send('export-error', err);
+    return { ok: false, ...err };
+  }
+  if (subtitlePath && !fs.existsSync(subtitlePath)) {
+    const err = { error: 'subtitle-missing' };
+    if (mainWindow) mainWindow.webContents.send('export-error', err);
+    return { ok: false, ...err };
+  }
+  if (musicPath && !fs.existsSync(musicPath)) {
+    const err = { error: 'music-missing' };
     if (mainWindow) mainWindow.webContents.send('export-error', err);
     return { ok: false, ...err };
   }
@@ -538,23 +763,70 @@ ipcMain.handle('export-video', async (event, payload) => {
     if (mainWindow) mainWindow.webContents.send('export-error', err);
     return { ok: false, ...err };
   }
+  // v1.1.0: append subtitles burn + preset scale/pad to the video chain.
+  const vfParts = [];
+  if (built.filter) vfParts.push(built.filter);
+  if (subtitlePath) vfParts.push(subtitlesFilter(subtitlePath, subtitleFontSize));
+  const pFilter = preset && preset !== 'original' ? presetFilter(preset) : null;
+  if (preset && preset !== 'original' && !pFilter) {
+    const err = { error: 'invalid-preset' };
+    if (mainWindow) mainWindow.webContents.send('export-error', err);
+    return { ok: false, ...err };
+  }
+  if (pFilter) vfParts.push(pFilter);
+  const videoFilter = vfParts.length ? vfParts.join(',') : null;
+
   const outPath = output || (await askOutputPath(event, suffixName(input, '-edited')));
   if (!outPath) return { ok: false, cancelled: true, error: null };
   const duration = await probeDuration(input);
   const total = Number.isNaN(e) ? duration : e - s;
+  const spd = Number(speed) || 1;
+  const hasMusic = !!musicPath && !mute;
   const args = ['-hide_banner', '-y', '-ss', String(s)];
   if (!Number.isNaN(e)) args.push('-to', String(e));
   args.push('-i', input);
-  if (built.filter) args.push('-vf', built.filter);
-  const spd = Number(speed) || 1;
-  if (mute) {
-    args.push('-an');
-  } else if (spd !== 1) {
-    const af = audioFilterForSpeed(spd);
-    if (af) args.push('-af', af);
+  if (hasMusic) args.push('-stream_loop', '-1', '-i', musicPath);
+
+  let result;
+  if (hasMusic) {
+    // Music needs a filter_complex: video chain + audio mix.
+    const vol = Math.max(0, Math.min(1, Number(musicVolume) || 0.5));
+    const fi = Math.max(0, Number(fadeIn) || 0);
+    const fo = Math.max(0, Number(fadeOut) || 0);
+    const outDuration = total || duration || 0;
+    const fadeOutStart = Math.max(0, outDuration - fo);
+    const musicFilter = `afade=t=in:st=0:d=${fi.toFixed(3)},afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fo.toFixed(3)},volume=${vol.toFixed(3)}`;
+    const hasAudio = await probeHasAudio(input);
+    const audioChain = [];
+    if (spd !== 1) {
+      const af = audioFilterForSpeed(spd);
+      if (af) audioChain.push(`[0:a]${af}[a0]`);
+      else audioChain.push('[0:a]anull[a0]');
+    } else {
+      audioChain.push('[0:a]anull[a0]');
+    }
+    const parts = [];
+    if (videoFilter) parts.push(`[0:v]${videoFilter}[v]`);
+    if (hasAudio) {
+      parts.push(audioChain[0]);
+      parts.push(`[1:a]${musicFilter}[a1]`);
+      parts.push('[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]');
+    } else {
+      parts.push(`[1:a]${musicFilter}[a]`);
+    }
+    args.push('-filter_complex', parts.join(';'));
+    args.push('-map', videoFilter ? '[v]' : '0:v', '-map', '[a]');
+  } else {
+    if (videoFilter) args.push('-vf', videoFilter);
+    if (mute) {
+      args.push('-an');
+    } else if (spd !== 1) {
+      const af = audioFilterForSpeed(spd);
+      if (af) args.push('-af', af);
+    }
   }
   args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', outPath);
-  const result = await runFfmpeg(args, withProgress(total, event));
+  result = await runFfmpeg(args, withProgress(total, event));
   if (!result.ok) {
     const err = { error: result.error, detail: result.stderr.slice(-500) };
     if (mainWindow) mainWindow.webContents.send('export-error', err);
