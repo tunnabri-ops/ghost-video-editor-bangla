@@ -11,6 +11,9 @@
 const $ = (id) => document.getElementById(id);
 
 const preview = $('preview');
+const preview2 = $('preview2');
+const musicAudio = $('musicAudio');
+const subtitleOverlayEl = $('subtitleOverlay');
 const previewEmpty = $('previewEmpty');
 const clipInfoEl = $('clipInfo');
 const clipListEl = $('clipList');
@@ -37,7 +40,76 @@ const state = {
   history: [], // { name, path, op, time }
   busy: false,
   pendingUpdateUrl: null,
+  subtitlePath: null, // v1.1.0
+  subCues: [], // v1.1.0: { start, end, text }
+  musicPath: null, // v1.1.0
+  playingAll: false, // v1.1.0
 };
+
+// ---- v1.1.0: SRT subtitles ----------------------------------------------
+function parseSrtTime(s) {
+  const m = /(\d+):(\d+):(\d+)[,.](\d+)/.exec(String(s || '').trim());
+  if (!m) return null;
+  return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4]) / 1000;
+}
+
+function parseSRT(text) {
+  const cues = [];
+  String(text || '').replace(/^\uFEFF/, '').split(/\r?\n\r?\n/).forEach((block) => {
+    const lines = block.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length < 2) return;
+    let ti = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf('-->') !== -1) { ti = i; break; }
+    }
+    if (ti < 0) return;
+    const parts = lines[ti].split('-->');
+    const start = parseSrtTime(parts[0]);
+    const end = parseSrtTime(parts[1] || '');
+    if (start === null || end === null || end <= start) return;
+    const txt = lines.slice(ti + 1).join('\n').trim();
+    if (txt) cues.push({ start, end, text: txt });
+  });
+  cues.sort((a, b) => a.start - b.start);
+  return cues;
+}
+
+function subtitleAt(cues, t) {
+  for (const cue of cues) {
+    if (t >= cue.start && t < cue.end) return cue.text;
+  }
+  return '';
+}
+
+function updateSubtitleOverlay() {
+  if (!subtitleOverlayEl) return;
+  subtitleOverlayEl.textContent = state.subCues.length
+    ? subtitleAt(state.subCues, preview.currentTime || 0)
+    : '';
+}
+
+// ---- v1.1.0: background music preview ------------------------------------
+function musicVolumeNow() {
+  if (!musicAudio || !state.musicPath) return 0;
+  const base = (parseInt($('musicVol').value, 10) || 0) / 100;
+  const t = preview.currentTime || 0;
+  const fi = parseFloat($('musicFadeIn').value) || 0;
+  const fo = parseFloat($('musicFadeOut').value) || 0;
+  const start = parseFloat($('trimStart').value) || 0;
+  const end = $('trimEnd').value === '' ? state.duration : parseFloat($('trimEnd').value);
+  let f = 1;
+  if (fi > 0 && t - start < fi) f = Math.max(0, (t - start) / fi);
+  if (fo > 0 && end && end - t < fo) f = Math.min(f, Math.max(0, (end - t) / fo));
+  return Math.max(0, Math.min(1, base * f));
+}
+
+function syncMusic() {
+  if (!musicAudio || !state.musicPath) return;
+  if (musicAudio.paused && !preview.paused && !preview.muted) {
+    musicAudio.play().catch(() => {});
+  }
+  musicAudio.volume = musicVolumeNow();
+}
 
 function fmt(seconds) {
   if (seconds === null || seconds === undefined || Number.isNaN(seconds)) return '00:00';
@@ -62,7 +134,8 @@ function setStatus(text, kind) {
 function setBusy(busy) {
   state.busy = busy;
   ['btnPickVideo', 'btnPickVideos', 'btnMerge', 'btnTrim', 'btnSplit',
-   'btnApplyText', 'btnApplyFilter', 'btnApplySpeed', 'btnExport'].forEach((id) => {
+   'btnApplyText', 'btnApplyFilter', 'btnApplySpeed', 'btnExport',
+   'btnAddSubtitles', 'btnAddMusic'].forEach((id) => {
     const el = $(id);
     if (el) el.disabled = busy || el.dataset.noClip === '1';
   });
@@ -79,6 +152,8 @@ function updateButtons() {
   $('btnApplyFilter').disabled = state.busy || !hasClip;
   $('btnApplySpeed').disabled = state.busy || !hasClip;
   $('btnExport').disabled = state.busy || !hasClip;
+  $('btnAddSubtitles').disabled = state.busy || !hasClip || !state.subtitlePath;
+  $('btnAddMusic').disabled = state.busy || !hasClip || !state.musicPath;
 }
 
 function showProgress(percent) {
@@ -100,6 +175,7 @@ function loadPreview(filePath) {
 }
 
 async function selectClip(filePath) {
+  transitionStarted = false;
   state.currentPath = filePath;
   state.currentName = filePath.split(/[\\/]/).pop();
   loadPreview(filePath);
@@ -177,6 +253,63 @@ async function pickMultiple() {
   }
 }
 
+// ---- v1.1.0: play all clips with transition preview ----------------------
+let transitionStarted = false;
+
+function nextClipAfterCurrent() {
+  const i = state.clips.findIndex((c) => c.path === state.currentPath);
+  return (i >= 0 && i + 1 < state.clips.length) ? state.clips[i + 1] : null;
+}
+
+function startTransitionTo(next) {
+  if (transitionStarted || !next) return;
+  transitionStarted = true;
+  const trans = $('transitionSelect').value;
+  const dur = Math.max(0.1, Math.min(2, parseFloat($('transitionDur').value) || 0.5));
+  preview2.src = `file://${encodeURI(next.path)}`;
+  preview2.playbackRate = preview.playbackRate;
+  preview2.muted = preview.muted;
+  preview2.style.transition = 'none';
+  preview2.style.opacity = '0';
+  preview2.style.transform = 'translateX(0)';
+  preview2.play().catch(() => {});
+  const ms = Math.round(dur * 1000);
+  preview2.style.transition = `opacity ${dur}s linear, transform ${dur}s linear`;
+  preview.style.transition = `opacity ${dur}s linear, transform ${dur}s linear`;
+  if (trans === 'slide') {
+    preview2.style.transform = 'translateX(100%)';
+    requestAnimationFrame(() => {
+      preview2.style.transform = 'translateX(0)';
+      preview.style.transform = 'translateX(-100%)';
+    });
+  } else {
+    requestAnimationFrame(() => { preview2.style.opacity = '1'; });
+  }
+  setTimeout(() => {
+    preview.pause();
+    preview.style.transition = 'none';
+    preview.style.transform = 'translateX(0)';
+    preview2.style.transition = 'none';
+    preview2.style.opacity = '0';
+    preview2.style.transform = 'translateX(0)';
+    preview2.pause();
+    preview2.removeAttribute('src');
+    preview2.load();
+    transitionStarted = false;
+    selectClip(next.path).then(() => {
+      if (state.playingAll) preview.play().catch(() => {});
+    });
+  }, ms);
+}
+
+async function playAllClips() {
+  if (!state.clips.length) return;
+  state.playingAll = true;
+  transitionStarted = false;
+  await selectClip(state.clips[0].path);
+  preview.play().catch((err) => setStatus(`ভিডিও চালানো যায়নি: ${err.message || err}`, 'error'));
+}
+
 // ---- Edit actions ---------------------------------------------------------
 function currentSettings() {
   return {
@@ -190,6 +323,13 @@ function currentSettings() {
     textPosition: $('textPosition').value,
     textSize: parseInt($('textSize').value, 10) || 48,
     mute: $('muteCheck').checked,
+    subtitlePath: state.subtitlePath, // v1.1.0
+    subtitleFontSize: 40, // v1.1.0 (fixed size; SRT burn uses libass default styling)
+    musicPath: state.musicPath, // v1.1.0
+    musicVolume: (parseInt($('musicVol').value, 10) || 0) / 100,
+    fadeIn: parseFloat($('musicFadeIn').value) || 0,
+    fadeOut: parseFloat($('musicFadeOut').value) || 0,
+    preset: $('presetSelect').value, // v1.1.0
   };
 }
 
@@ -203,6 +343,12 @@ function describeError(result) {
   if (result.error === 'split-after-end') return 'স্প্লিটের জায়গা ভিডিওর শেষের পরে';
   if (result.error === 'empty-text') return 'টেক্সট লিখুন';
   if (result.error === 'file-not-found') return 'ফাইলটি পাওয়া যায়নি';
+  if (result.error === 'subtitle-missing') return 'সাবটাইটেল (SRT) ফাইল পাওয়া যায়নি';
+  if (result.error === 'music-missing') return 'মিউজিক ফাইল পাওয়া যায়নি';
+  if (result.error === 'invalid-volume') return 'মিউজিকের ভলিউম ০ থেকে ১-এর মধ্যে হতে হবে';
+  if (result.error === 'invalid-preset') return 'প্রিসেটটি ঠিক নেই';
+  if (result.error === 'invalid-transition') return 'ট্রানজিশনটি ঠিক নেই';
+  if (result.error === 'clip-too-short') return 'কোনো ক্লিপ ট্রানজিশনের দৈর্ঘ্যের চেয়ে ছোট';
   return result.detail ? `${result.error}: ${result.detail}` : (result.error || 'অজানা ত্রুটি');
 }
 
@@ -273,10 +419,97 @@ async function doMerge() {
   setStatus('মার্জ হচ্ছে…', 'busy');
   showProgress(0);
   try {
-    const result = await window.ghostVideoEditor.mergeVideos({ inputs: state.clips.map((c) => c.path) });
+    const result = await window.ghostVideoEditor.mergeVideos({
+      inputs: state.clips.map((c) => c.path),
+      transition: $('transitionSelect').value,
+      transitionDuration: parseFloat($('transitionDur').value) || 0.5,
+      preset: $('presetSelect').value,
+    });
     handleResult(result, 'মার্জ');
   } catch (err) {
     setStatus(`মার্জ হয়নি: ${err.message || err}`, 'error');
+  } finally {
+    setBusy(false);
+    hideProgress();
+  }
+}
+
+// ---- v1.1.0: subtitles / music actions ------------------------------------
+async function pickSubtitleFile() {
+  try {
+    const result = await window.ghostVideoEditor.pickSubtitle();
+    if (result && !result.cancelled && result.path) {
+      const read = await window.ghostVideoEditor.readSubtitleFile(result.path);
+      if (!read || !read.ok) {
+        setStatus('SRT ফাইল পড়া যায়নি', 'error');
+        return;
+      }
+      const cues = parseSRT(read.text);
+      if (!cues.length) {
+        setStatus('SRT ফাইলে কোনো সাবটাইটেল পাওয়া যায়নি', 'error');
+        return;
+      }
+      state.subtitlePath = result.path;
+      state.subCues = cues;
+      $('subtitleInfo').textContent = `📄 ${result.path.split(/[\\/]/).pop()} — ${cues.length}টি সাবটাইটেল`;
+      $('btnClearSubtitle').classList.remove('hidden');
+      updateSubtitleOverlay();
+      updateButtons();
+      setStatus('সাবটাইটেল লোড হয়েছে ✓', 'done');
+    }
+  } catch (err) {
+    setStatus(`সাবটাইটেল খোলা যায়নি: ${err.message || err}`, 'error');
+  }
+}
+
+async function pickMusicFile() {
+  try {
+    const result = await window.ghostVideoEditor.pickMusic();
+    if (result && !result.cancelled && result.path) {
+      state.musicPath = result.path;
+      musicAudio.src = `file://${encodeURI(result.path)}`;
+      $('musicInfo').textContent = `🎵 ${result.path.split(/[\\/]/).pop()}`;
+      $('btnClearMusic').classList.remove('hidden');
+      updateButtons();
+      setStatus('মিউজিক লোড হয়েছে ✓', 'done');
+    }
+  } catch (err) {
+    setStatus(`মিউজিক খোলা যায়নি: ${err.message || err}`, 'error');
+  }
+}
+
+async function doAddSubtitles() {
+  if (!state.currentPath || !state.subtitlePath) return;
+  setBusy(true);
+  setStatus('সাবটাইটেল বসানো হচ্ছে…', 'busy');
+  showProgress(0);
+  try {
+    const result = await window.ghostVideoEditor.addSubtitles({
+      input: state.currentPath, subtitlePath: state.subtitlePath, fontSize: 40,
+    });
+    handleResult(result, 'সাবটাইটেল');
+  } catch (err) {
+    setStatus(`সাবটাইটেল বসানো যায়নি: ${err.message || err}`, 'error');
+  } finally {
+    setBusy(false);
+    hideProgress();
+  }
+}
+
+async function doAddMusic() {
+  if (!state.currentPath || !state.musicPath) return;
+  const s = currentSettings();
+  setBusy(true);
+  setStatus('মিউজিক যোগ করা হচ্ছে…', 'busy');
+  showProgress(0);
+  try {
+    const result = await window.ghostVideoEditor.addMusic({
+      input: s.input, musicPath: s.musicPath, musicVolume: s.musicVolume,
+      fadeIn: s.fadeIn, fadeOut: s.fadeOut,
+    });
+    handleResult(result, 'মিউজিক');
+  } catch (err) {
+    setStatus(`মিউজিক যোগ করা যায়নি: ${err.message || err}`, 'error');
   } finally {
     setBusy(false);
     hideProgress();
@@ -461,6 +694,30 @@ $('btnApplyText').addEventListener('click', doAddText);
 $('btnApplyFilter').addEventListener('click', doApplyFilter);
 $('btnApplySpeed').addEventListener('click', doChangeSpeed);
 $('btnExport').addEventListener('click', doExport);
+$('btnPickSubtitle').addEventListener('click', pickSubtitleFile);
+$('btnPickMusic').addEventListener('click', pickMusicFile);
+$('btnAddSubtitles').addEventListener('click', doAddSubtitles);
+$('btnAddMusic').addEventListener('click', doAddMusic);
+$('btnPlayAll').addEventListener('click', playAllClips);
+$('btnClearSubtitle').addEventListener('click', () => {
+  state.subtitlePath = null;
+  state.subCues = [];
+  $('subtitleInfo').textContent = 'কোনো সাবটাইটেল লোড হয়নি।';
+  $('btnClearSubtitle').classList.add('hidden');
+  updateSubtitleOverlay();
+  updateButtons();
+});
+$('btnClearMusic').addEventListener('click', () => {
+  state.musicPath = null;
+  if (musicAudio) { musicAudio.pause(); musicAudio.removeAttribute('src'); }
+  $('musicInfo').textContent = 'কোনো মিউজিক লোড হয়নি।';
+  $('btnClearMusic').classList.add('hidden');
+  updateButtons();
+});
+$('musicVol').addEventListener('input', (e) => {
+  $('musicVolVal').textContent = `${e.target.value}%`;
+  syncMusic();
+});
 $('btnSetStart').addEventListener('click', () => { $('trimStart').value = preview.currentTime.toFixed(1); });
 $('btnSetEnd').addEventListener('click', () => { $('trimEnd').value = preview.currentTime.toFixed(1); });
 $('brightness').addEventListener('input', (e) => { $('brightnessVal').textContent = e.target.value; });
@@ -475,6 +732,39 @@ historySearchEl.addEventListener('input', renderHistory);
 
 preview.addEventListener('timeupdate', () => {
   timeNowEl.textContent = fmt(preview.currentTime);
+  updateSubtitleOverlay();
+  syncMusic();
+  // v1.1.0: play-all — start the crossfade into the next clip just
+  // before this clip ends (or jump straight to it when transition=none).
+  if (state.playingAll && preview.duration) {
+    const next = nextClipAfterCurrent();
+    if (next) {
+      const trans = $('transitionSelect').value;
+      const dur = Math.max(0.1, Math.min(2, parseFloat($('transitionDur').value) || 0.5));
+      if (trans !== 'none' && preview.currentTime >= preview.duration - dur) {
+        startTransitionTo(next);
+      } else if (trans === 'none' && preview.currentTime >= preview.duration - 0.05 && !transitionStarted) {
+        transitionStarted = true;
+        selectClip(next.path).then(() => preview.play().catch(() => {}));
+      }
+    } else if (preview.currentTime >= preview.duration - 0.05) {
+      state.playingAll = false;
+    }
+  }
+});
+preview.addEventListener('ended', () => {
+  if (musicAudio) musicAudio.pause();
+  if (state.playingAll) {
+    const next = nextClipAfterCurrent();
+    if (next) {
+      selectClip(next.path).then(() => preview.play().catch(() => {}));
+    } else {
+      state.playingAll = false;
+    }
+  }
+});
+preview.addEventListener('pause', () => {
+  if (musicAudio) musicAudio.pause();
 });
 preview.addEventListener('loadedmetadata', () => {
   if (!state.duration) timeTotalEl.textContent = fmt(preview.duration);

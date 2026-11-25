@@ -12,7 +12,7 @@
     <span class="ghost" aria-hidden="true">👻</span>
     <div>
       <h1>Ghost Video Editor Bangla</h1>
-      <p>ট্রিম · স্প্লিট · মার্জ · টেক্সট · ফিল্টার &nbsp;·&nbsp; <span id="appVersion">v1.0.0</span></p>
+      <p>ট্রিম · স্প্লিট · মার্জ · টেক্সট · ফিল্টার &nbsp;·&nbsp; <span id="appVersion">v1.1.0</span></p>
     </div>
   </div>
   <div class="top-actions">
@@ -45,8 +45,11 @@
     <h2>২. প্রিভিউ ও এডিট</h2>
     <div class="preview-wrap">
       <video id="preview" controls playsinline></video>
+      <video id="preview2" class="next" playsinline aria-hidden="true"></video>
+      <div id="subtitleOverlay" class="subtitle-overlay" aria-live="polite"></div>
       <div id="previewEmpty" class="preview-empty">প্রিভিউ এখানে দেখা যাবে — প্রথমে একটি ভিডিও খুলুন</div>
     </div>
+    <audio id="musicAudio" preload="metadata" class="hidden"></audio>
     <div class="timer-row">
       <span>সময়: <strong id="timeNow">00:00</strong> / <strong id="timeTotal">00:00</strong></span>
       <span id="statusText" class="status">প্রস্তুত</span>
@@ -88,6 +91,48 @@
       </label>
     </div>
 
+    <h3>সাবটাইটেল ও মিউজিক</h3>
+    <div class="field-row">
+      <button id="btnPickSubtitle" class="btn small" type="button">📄 SRT সাবটাইটেল বাছুন</button>
+      <span id="subtitleInfo" class="hint">কোনো সাবটাইটেল লোড হয়নি।</span>
+      <button id="btnClearSubtitle" class="btn small hidden" type="button">✕ সরান</button>
+    </div>
+    <div class="field-row">
+      <button id="btnPickMusic" class="btn small" type="button">🎵 মিউজিক বাছুন</button>
+      <span id="musicInfo" class="hint">কোনো মিউজিক লোড হয়নি।</span>
+      <button id="btnClearMusic" class="btn small hidden" type="button">✕ সরান</button>
+    </div>
+    <div class="slider-row">
+      <label>মিউজিক ভলিউম <span id="musicVolVal">৫০%</span>
+        <input id="musicVol" type="range" min="0" max="100" value="50">
+      </label>
+      <label>ফেড ইন (সে.)
+        <input id="musicFadeIn" type="number" min="0" max="10" step="0.5" value="1">
+      </label>
+      <label>ফেড আউট (সে.)
+        <input id="musicFadeOut" type="number" min="0" max="10" step="0.5" value="1">
+      </label>
+    </div>
+    <div class="controls">
+      <button id="btnAddSubtitles" class="btn" type="button" disabled>💬 সাবটাইটেল বসান</button>
+      <button id="btnAddMusic" class="btn" type="button" disabled>🎵 মিউজিক যোগ করুন</button>
+    </div>
+
+    <h3>ট্রানজিশন (মার্জের সময়)</h3>
+    <div class="field-row">
+      <label>ট্রানজিশন
+        <select id="transitionSelect">
+          <option value="none" selected>কোনো ট্রানজিশন নয়</option>
+          <option value="fade">ফেড (ক্রসফেড)</option>
+          <option value="slide">স্লাইড (বাম থেকে)</option>
+        </select>
+      </label>
+      <label>দৈর্ঘ্য (সে.)
+        <input id="transitionDur" type="number" min="0.1" max="2" step="0.1" value="0.5">
+      </label>
+      <button id="btnPlayAll" class="btn small" type="button">▶ সব ক্লিপ একসাথে চালান</button>
+    </div>
+
     <h3>ফিল্টার ও গতি</h3>
     <div class="slider-row">
       <label>উজ্জ্বলতা <span id="brightnessVal">০</span>
@@ -119,7 +164,17 @@
     </div>
 
     <h3>এক্সপোর্ট</h3>
-    <p class="hint">এক্সপোর্টে উপরের সব সেটিং (ট্রিম, টেক্সট, ফিল্টার, গতি, মিউট) একসাথে MP4 হিসেবে সেভ হবে।</p>
+    <p class="hint">এক্সপোর্টে উপরের সব সেটিং (ট্রিম, টেক্সট, সাবটাইটেল, মিউজিক, ফিল্টার, গতি, মিউট) একসাথে MP4 হিসেবে সেভ হবে। মার্জের ট্রানজিশন শুধু মার্জে লাগে।</p>
+    <div class="field-row">
+      <label>প্রিসেট
+        <select id="presetSelect">
+          <option value="original" selected>আসল সাইজ (Original)</option>
+          <option value="720p">720p HD (1280×720)</option>
+          <option value="1080p">1080p Full HD (1920×1080)</option>
+          <option value="vertical">ভার্টিকাল 9:16 (1080×1920) — Shorts/Reels</option>
+        </select>
+      </label>
+    </div>
     <div class="controls">
       <button id="btnExport" class="btn primary big" type="button" disabled>⬇️ MP4 এক্সপোর্ট করুন</button>
     </div>
