@@ -25,6 +25,17 @@
 - **History** (web + desktop) — your past edits are saved (max 50), searchable on desktop
 - **Minimize to tray** (Electron desktop) — closing the window hides it in the system tray
 - **Update check** (Electron desktop) — checks GitHub releases and tells you when a newer version is out; never downloads anything by itself
+- **Subtitles (SRT)** — v1.1.0: load an `.srt` file, see it timed in the preview, burn it into the export
+- **Clip transitions** — v1.1.0: fade / slide between clips when merging (desktop + Python) or exporting all clips together (web)
+- **Background music** — v1.1.0: mix a music track under the clip audio, with fade-in / fade-out
+- **Export presets** — v1.1.0: Original, 720p (1280×720), 1080p (1920×1080), Vertical 9:16 (1080×1920, for Shorts/Reels)
+
+## 🆕 What's new in v1.1.0
+
+1. **Subtitle track** — add `.srt` subtitles: they show timed in the preview and are burned into the export. Python renders each cue with Pillow (Bangla-safe); web draws them on the export canvas; Electron uses ffmpeg's `subtitles` filter (libass).
+2. **Clip transitions** — fade (cross-dissolve) and slide (slide-left) between clips. Python and Electron merge use ffmpeg `xfade` (+ `acrossfade` for audio); web crossfades on canvas when playing/exporting all clips together, and in the preview when playing all clips.
+3. **Background music + volume fade** — pick a music file; it is mixed under the clip audio (looped to the video length) with fade-in at the start and fade-out at the end. Python and Electron mix with ffmpeg; web mixes with WebAudio in the preview and into the export recording.
+4. **Export presets** — 720p, 1080p and vertical 9:16 (1080×1920) alongside the original size. Presets scale to fit and pad with black — nothing is cropped and the picture is never stretched. Web exports WebM at the preset size; Python and Electron export MP4.
 
 ## 🚀 Three versions
 
@@ -65,6 +76,8 @@ Export runs the bundled `ffmpeg-static` binary. A Windows installer + portable e
 - Web history stores file names and settings only — local files can't be re-opened from history; pick the file again.
 - The Python app has no live video preview timeline yet (it shows duration, resolution and FPS); merge normalises later clips to the first clip's resolution.
 - Electron preview uses a `file://` URL — very long or unusual paths may not preview, but editing and export still work on the file itself.
+- Vertical 9:16 presets pad the frame with black bars to 1080×1920 — nothing is cropped.
+- Electron transition preview restarts the next clip from its beginning after the crossfade (a jump of up to the transition length); the exported merge has no such jump.
 - Nothing is ever uploaded anywhere — all three versions edit fully on your own machine.
 
 ## 🇧🇩 বাংলা
@@ -74,6 +87,7 @@ Export runs the bundled `ffmpeg-static` binary. A Windows installer + portable e
 - ভিডিও কাটা (ট্রিম), ভাগ করা (স্প্লিট), জোড়া দেওয়া (মার্জ)
 - ভিডিওর উপর লেখা বসানো — বাংলা লেখা ঠিকমতো দেখাবে
 - উজ্জ্বলতা / কন্ট্রাস্ট, গতি বদলানো, শব্দ বন্ধ করা
+- সাবটাইটেল (SRT), ক্লিপের মাঝে ফেড/স্লাইড ট্রানজিশন, ব্যাকগ্রাউন্ড মিউজিক (ফেড ইন/আউটসহ), এক্সপোর্ট প্রিসেট (720p/1080p/ভার্টিকাল 9:16)
 - ওয়েবে WebM, ডেস্কটপে MP4 এক্সপোর্ট
 - বাংলা ইন্টারফেস, ডার্ক ডিজাইন, এডিট হিস্ট্রি
 
